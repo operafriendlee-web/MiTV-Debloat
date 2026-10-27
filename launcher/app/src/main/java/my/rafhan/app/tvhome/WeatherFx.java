@@ -37,7 +37,7 @@ final class WeatherFx extends View {
     // Johor Bahru. Change these two numbers for another town.
     private static final double LAT = 1.4927, LON = 103.7414;
     private static final String API = "https://api.open-meteo.com/v1/forecast?latitude=" + LAT
-            + "&longitude=" + LON + "&current=weather_code&timezone=auto";
+            + "&longitude=" + LON + "&current=temperature_2m,weather_code&timezone=auto";
     private static final long REFRESH_MS = 30 * 60_000L, RETRY_MS = 2 * 60_000L;
     private static final long TICK_MS = 5_000L, FRAME_MS = 40L;
     private static final String TEST_FILE = "weather-test.txt";
@@ -100,11 +100,70 @@ final class WeatherFx extends View {
         try {
             ViewGroup parent = (ViewGroup) wallpaper.getParent();
             if (parent == null) return;
-            parent.addView(new WeatherFx(a), parent.indexOfChild(wallpaper) + 1,
+            WeatherFx fx = new WeatherFx(a);
+            parent.addView(fx, parent.indexOfChild(wallpaper) + 1,
                     new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT));
+            fx.buildWidget(a);
         } catch (RuntimeException ignored) {
         }
+    }
+
+    // ---------------------------------------------------------------- widget
+
+    private android.widget.LinearLayout wBox;
+    private android.widget.TextView wTemp, wCond;
+
+    /** Small city / temperature / condition block to the right of the dates. Hidden until the first forecast. */
+    private void buildWidget(Activity a) {
+        try {
+            View band = a.findViewById(R.id.clockBlock);
+            if (!(band instanceof android.widget.LinearLayout)) return;
+            wBox = new android.widget.LinearLayout(a);
+            wBox.setOrientation(android.widget.LinearLayout.VERTICAL);
+            wBox.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+            android.widget.TextView city = new android.widget.TextView(a);
+            city.setText("JOHOR BAHRU");
+            city.setTextColor(0x99FFFFFF);
+            city.setTextSize(11);
+            city.setTypeface(Fonts.outfit(a, 400));
+            wTemp = new android.widget.TextView(a);
+            wTemp.setTextColor(0xFFFFFFFF);
+            wTemp.setTextSize(30);
+            wTemp.setIncludeFontPadding(false);
+            wTemp.setTypeface(Fonts.outfit(a, 300));
+            wCond = new android.widget.TextView(a);
+            wCond.setTextColor(0xB3FFFFFF);
+            wCond.setTextSize(13);
+            wCond.setTypeface(Fonts.outfit(a, 400));
+            wBox.addView(city);
+            wBox.addView(wTemp);
+            wBox.addView(wCond);
+            wBox.setVisibility(View.GONE);
+            android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMarginStart((int) (36 * density));
+            lp.gravity = android.view.Gravity.CENTER_VERTICAL;
+            ((android.widget.LinearLayout) band).addView(wBox, lp);
+        } catch (RuntimeException e) {
+            wBox = null;
+        }
+    }
+
+    private void showWidget(int code, int temp) {
+        if (wBox == null || temp == Integer.MIN_VALUE) return;
+        String icon, text;
+        if (code <= 1) { icon = "\u2600\uFE0F"; text = "Cerah"; }
+        else if (code == 2) { icon = "\u26C5"; text = "Berawan"; }
+        else if (code == 3) { icon = "\u2601\uFE0F"; text = "Mendung"; }
+        else if (code == 45 || code == 48) { icon = "\uD83C\uDF2B\uFE0F"; text = "Berkabus"; }
+        else if (code >= 51 && code <= 57) { icon = "\uD83C\uDF26\uFE0F"; text = "Gerimis"; }
+        else if (code >= 95) { icon = "\u26C8\uFE0F"; text = "Ribut petir"; }
+        else if (code >= 51) { icon = "\uD83C\uDF27\uFE0F"; text = "Hujan"; }
+        else { icon = "\u2601\uFE0F"; text = "Berawan"; }
+        wTemp.setText(icon + " " + temp + "\u00B0");
+        wCond.setText(text);
+        wBox.setVisibility(View.VISIBLE);
     }
 
     // ---------------------------------------------------------------- weather
@@ -130,7 +189,7 @@ final class WeatherFx extends View {
         if (lastFetch != 0 && now - lastFetch < REFRESH_MS) return;
         fetching = true;
         new Thread(() -> {
-            int code = -1;
+            int code = -1, temp = Integer.MIN_VALUE;
             HttpURLConnection c = null;
             try {
                 c = (HttpURLConnection) new URL(API).openConnection();
@@ -142,17 +201,20 @@ final class WeatherFx extends View {
                             new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
                         for (String line; (line = r.readLine()) != null; ) sb.append(line);
                     }
-                    code = new JSONObject(sb.toString()).getJSONObject("current").getInt("weather_code");
+                    JSONObject cur = new JSONObject(sb.toString()).getJSONObject("current");
+                    code = cur.getInt("weather_code");
+                    temp = (int) Math.round(cur.getDouble("temperature_2m"));
                 }
             } catch (Exception e) {
                 android.util.Log.w("TvHome", "weather fetch failed", e);
             } finally {
                 if (c != null) c.disconnect();
             }
-            final int result = code;
+            final int result = code, tmp = temp;
             post(() -> {
                 fetching = false;
                 if (result >= 0) {
+                    showWidget(result, tmp);
                     int[] l = look(result);
                     liveCloud = l[0];
                     liveRain = l[1];
