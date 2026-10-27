@@ -34,8 +34,8 @@ import java.util.Random;
  * clear, cloud, rain, heavy, storm, or off (switches the effect off). Delete the file to go back.
  */
 final class WeatherFx extends View {
-    // Johor Bahru. Change these two numbers for another town.
-    private static final double LAT = 1.4927, LON = 103.7414;
+    // Skudai. Change these two numbers for another town.
+    private static final double LAT = 1.5333, LON = 103.6667;
     private static final String API = "https://api.open-meteo.com/v1/forecast?latitude=" + LAT
             + "&longitude=" + LON + "&current=temperature_2m,weather_code&timezone=auto";
     private static final long REFRESH_MS = 30 * 60_000L, RETRY_MS = 2 * 60_000L;
@@ -125,7 +125,7 @@ final class WeatherFx extends View {
             wBox.setOrientation(android.widget.LinearLayout.VERTICAL);
             wBox.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
             android.widget.TextView city = new android.widget.TextView(a);
-            city.setText("JOHOR BAHRU");
+            city.setText("SKUDAI");
             city.setTextColor(0x99FFFFFF);
             city.setTextSize(11);
             city.setTypeface(Fonts.outfit(a, 400));
