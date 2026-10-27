@@ -179,8 +179,8 @@ final class WeatherFx extends View {
             case 0: case 1: return new int[]{0, 0, 0};
             case 2: return new int[]{1, 0, 0};
             case 3: case 45: case 48: return new int[]{2, 0, 0};
-            case 51: case 53: case 56: case 61: case 80: return new int[]{2, 1, 0};
-            case 55: case 57: case 63: case 66: case 81: return new int[]{2, 2, 0};
+            case 51: case 53: case 55: case 56: case 57: case 61: case 80: return new int[]{2, 1, 0};
+            case 63: case 66: case 81: return new int[]{2, 2, 0};
             case 65: case 67: case 82: return new int[]{2, 3, 0};
             case 95: return new int[]{2, 2, 1};
             case 96: case 99: return new int[]{2, 3, 1};
