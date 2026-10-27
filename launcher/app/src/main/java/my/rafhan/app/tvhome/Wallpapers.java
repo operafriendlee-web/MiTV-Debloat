@@ -74,8 +74,8 @@ final class Wallpapers {
         }
         switch (kind) {
             case "ribut": return "nightclouds";
-            case "hujan": return "sunrise";
-            case "mendung": return "sunrise";
+            case "hujan": return "nightclouds";
+            case "mendung": return "nightclouds";
             default: return "seliger";
         }
     }
