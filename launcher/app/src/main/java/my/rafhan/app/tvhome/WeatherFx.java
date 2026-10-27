@@ -318,7 +318,7 @@ final class WeatherFx extends View {
             blobV[i] = w * (0.006f + rnd.nextFloat() * 0.012f);
             blobShader[i] = new RadialGradient(0, 0, blobR[i], centre, edge, Shader.TileMode.CLAMP);
         }
-        int drops = off ? 0 : rain == 1 ? 55 : rain == 2 ? 110 : rain == 3 ? 180 : 0;
+        int drops = off ? 0 : rain == 1 ? 28 : rain == 2 ? 110 : rain == 3 ? 180 : 0;
         dropX = new float[drops];
         dropY = new float[drops];
         dropLen = new float[drops];
