@@ -104,6 +104,7 @@ final class WeatherFx extends View {
             parent.addView(fx, parent.indexOfChild(wallpaper) + 1,
                     new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT));
+            android.util.Log.i("TvHome", "WeatherFx attached");
             fx.buildWidget(a);
         } catch (RuntimeException ignored) {
         }
@@ -118,6 +119,7 @@ final class WeatherFx extends View {
     private void buildWidget(Activity a) {
         try {
             View band = a.findViewById(R.id.clockBlock);
+            android.util.Log.i("TvHome", "weather widget band=" + band);
             if (!(band instanceof android.widget.LinearLayout)) return;
             wBox = new android.widget.LinearLayout(a);
             wBox.setOrientation(android.widget.LinearLayout.VERTICAL);
@@ -146,11 +148,14 @@ final class WeatherFx extends View {
             lp.gravity = android.view.Gravity.CENTER_VERTICAL;
             ((android.widget.LinearLayout) band).addView(wBox, lp);
         } catch (RuntimeException e) {
+            android.util.Log.w("TvHome", "weather widget build failed", e);
             wBox = null;
         }
     }
 
     private void showWidget(int code, int temp) {
+        android.util.Log.i("TvHome", "weather code=" + code + " temp=" + temp);
+        if (wBox == null && getContext() instanceof Activity) buildWidget((Activity) getContext());
         if (wBox == null || temp == Integer.MIN_VALUE) return;
         String icon, text;
         if (code <= 1) { icon = "\u2600\uFE0F"; text = "Cerah"; }
@@ -195,7 +200,9 @@ final class WeatherFx extends View {
                 c = (HttpURLConnection) new URL(API).openConnection();
                 c.setConnectTimeout(15_000);
                 c.setReadTimeout(15_000);
-                if (c.getResponseCode() == 200) {
+                int rc = c.getResponseCode();
+                android.util.Log.i("TvHome", "weather http " + rc);
+                if (rc == 200) {
                     StringBuilder sb = new StringBuilder();
                     try (BufferedReader r = new BufferedReader(
                             new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
