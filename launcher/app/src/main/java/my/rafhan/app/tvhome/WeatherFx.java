@@ -37,7 +37,7 @@ final class WeatherFx extends View {
     // Skudai. Change these two numbers for another town.
     private static final double LAT = 1.5333, LON = 103.6667;
     private static final String API = "https://api.open-meteo.com/v1/forecast?latitude=" + LAT
-            + "&longitude=" + LON + "&current=temperature_2m,weather_code&timezone=auto";
+            + "&longitude=" + LON + "&current=temperature_2m,precipitation,cloud_cover,weather_code&timezone=auto";
     private static final long REFRESH_MS = 30 * 60_000L, RETRY_MS = 2 * 60_000L;
     private static final long TICK_MS = 5_000L, FRAME_MS = 40L;
     private static final String TEST_FILE = "weather-test.txt";
@@ -210,6 +210,9 @@ final class WeatherFx extends View {
                     }
                     JSONObject cur = new JSONObject(sb.toString()).getJSONObject("current");
                     code = cur.getInt("weather_code");
+                    double pr = cur.optDouble("precipitation", 1), cc = cur.optDouble("cloud_cover", 100);
+                    boolean wet = code >= 51 && code <= 67 || code >= 80 && code <= 82;
+                    if (wet && pr < 0.5) code = cc >= 70 ? 3 : cc >= 30 ? 2 : 0;
                     temp = (int) Math.round(cur.getDouble("temperature_2m"));
                 }
             } catch (Exception e) {
