@@ -1595,7 +1595,7 @@ public class MainActivity extends Activity {
      * background and shown when it lands; until then home stays black.
      */
     private void loadWallpaper() {
-        String choice = wallpaperPreview != null ? wallpaperPreview : LauncherSettings.wallpaper(this);
+        String choice = Wallpapers.effective(this, wallpaperPreview != null ? wallpaperPreview : LauncherSettings.wallpaper(this));
         File found = Wallpapers.file(this, choice);
         // Bing "photo of the day": refresh at most once a day (and no more than once a minute
         // when it keeps failing, e.g. offline); a new day's picture then swaps in via the stamp.

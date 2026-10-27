@@ -403,6 +403,7 @@ final class SettingsScreen {
     static String wallpaperName(String choice) {
         if (Wallpapers.CUSTOM.equals(choice)) return "Your picture";
         if (Wallpapers.BING.equals(choice)) return "Bing daily";
+        if (Wallpapers.WEATHER.equals(choice)) return "Follow the weather";
         if (choice.startsWith(Wallpapers.FILE)) return baseName(choice.substring(Wallpapers.FILE.length()));
         Wallpapers.Photo p = Wallpapers.photo(choice);
         return p != null ? p.name : "None";
@@ -552,6 +553,13 @@ final class SettingsScreen {
         bing.id = Wallpapers.BING;
         bing.action = () -> pickWallpaper(Wallpapers.BING);
         items.add(bing);
+        Row wx = new Row(CHECK, "Follow the weather");
+        wx.sub = "Sunny, cloudy, rain, storm. Or add cerah / mendung / hujan / ribut pictures to the Wallpapers folder";
+        wx.thumbSlot = true;
+        wx.checked = Wallpapers.WEATHER.equals(current);
+        wx.id = Wallpapers.WEATHER;
+        wx.action = () -> pickWallpaper(Wallpapers.WEATHER);
+        items.add(wx);
         for (Wallpapers.Photo p : Wallpapers.BUILT_IN) {
             Row r = new Row(CHECK, p.name);
             boolean cached = Wallpapers.isCached(ctx, p.id);

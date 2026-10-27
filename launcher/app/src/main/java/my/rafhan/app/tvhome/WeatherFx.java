@@ -47,7 +47,7 @@ final class WeatherFx extends View {
     private boolean storm, off;
     // What the last forecast said.
     private int liveCloud, liveRain;
-    private boolean liveStorm;
+    private boolean liveStorm, liveKnown;
     private long lastFetch;
     private boolean fetching, running;
     private String lastOverride = "";
@@ -226,6 +226,7 @@ final class WeatherFx extends View {
                     liveCloud = l[0];
                     liveRain = l[1];
                     liveStorm = l[2] == 1;
+                    liveKnown = true;
                     lastFetch = System.currentTimeMillis();
                 } else {
                     lastFetch = System.currentTimeMillis() - REFRESH_MS + RETRY_MS; // try again soon
@@ -283,6 +284,19 @@ final class WeatherFx extends View {
         }
         buildScene();
         invalidate();
+        if (o != null || liveKnown) publishKind(storm ? "ribut" : rain > 0 ? "hujan" : cloud == 2 ? "mendung" : "cerah");
+    }
+
+    /** Tells "Follow the weather" wallpaper what the weather is; reloads the wallpaper when it changed. */
+    private void publishKind(String kind) {
+        try {
+            Context c = getContext();
+            android.content.SharedPreferences sp = c.getSharedPreferences("weather_fx", Context.MODE_PRIVATE);
+            if (kind.equals(sp.getString("kind", ""))) return;
+            sp.edit().putString("kind", kind).apply();
+            if (Wallpapers.WEATHER.equals(LauncherSettings.wallpaper(c))) LauncherSettings.setWallpaper(c, Wallpapers.WEATHER);
+        } catch (RuntimeException ignored) {
+        }
     }
 
     // ---------------------------------------------------------------- scene

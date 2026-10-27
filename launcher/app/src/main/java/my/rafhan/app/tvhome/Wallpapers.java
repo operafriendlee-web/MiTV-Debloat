@@ -58,6 +58,28 @@ final class Wallpapers {
                     "3/3f/Helkivad_%C3%B6%C3%B6pilved_Kuresoo_kohal.jpg/1920px-Helkivad_%C3%B6%C3%B6pilved_Kuresoo_kohal.jpg"),
     };
 
+    static final String WEATHER = "weather";
+
+    /**
+     * "Follow the weather": the picture for the weather WeatherFx last saw. A picture named
+     * cerah / mendung / hujan / ribut in the Wallpapers folder wins, else a built-in.
+     */
+    static String effective(Context ctx, String choice) {
+        if (!WEATHER.equals(choice)) return choice;
+        String kind = ctx.getSharedPreferences("weather_fx", Context.MODE_PRIVATE).getString("kind", "cerah");
+        for (File f : userPictures()) {
+            String n = f.getName().toLowerCase(Locale.ROOT);
+            int dot = n.lastIndexOf('.');
+            if (dot > 0 && n.substring(0, dot).equals(kind)) return FILE + f.getName();
+        }
+        switch (kind) {
+            case "ribut": return "nightclouds";
+            case "hujan": return "forest";
+            case "mendung": return "sunrise";
+            default: return "seliger";
+        }
+    }
+
     private Wallpapers() {}
 
     static Photo photo(String id) {
