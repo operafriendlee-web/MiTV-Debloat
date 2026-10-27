@@ -74,7 +74,7 @@ final class Wallpapers {
         }
         switch (kind) {
             case "ribut": return "nightclouds";
-            case "hujan": return "forest";
+            case "hujan": return "sunrise";
             case "mendung": return "sunrise";
             default: return "seliger";
         }
