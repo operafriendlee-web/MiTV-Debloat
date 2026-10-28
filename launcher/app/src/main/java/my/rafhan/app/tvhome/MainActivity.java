@@ -255,6 +255,7 @@ public class MainActivity extends Activity {
         page = findViewById(R.id.page);
         wallpaper = findViewById(R.id.wallpaper);
         WeatherFx.attach(this, wallpaper);
+        DailyAyah.attach(this);
         highlight = findViewById(R.id.highlight);
         hijri = findViewById(R.id.hijri);
         clock = findViewById(R.id.clock);

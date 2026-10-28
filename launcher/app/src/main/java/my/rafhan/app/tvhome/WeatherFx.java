@@ -36,6 +36,7 @@ import java.util.Random;
 final class WeatherFx extends View {
     // Skudai. Change these two numbers for another town.
     private static final double LAT = 1.5333, LON = 103.6667;
+    private static final String AQI_STATION = "CA30J"; // Larkin, Johor Bahru (DOE APIMS)
     private static final String API = "https://api.open-meteo.com/v1/forecast?latitude=" + LAT
             + "&longitude=" + LON + "&current=temperature_2m,precipitation,cloud_cover,weather_code&timezone=auto";
     private static final long REFRESH_MS = 30 * 60_000L, RETRY_MS = 2 * 60_000L;
@@ -114,6 +115,8 @@ final class WeatherFx extends View {
 
     private android.widget.LinearLayout wBox;
     private android.widget.TextView wTemp, wCond;
+    private android.widget.LinearLayout aBox;
+    private android.widget.TextView aHead, aNum, aCond;
 
     /** Small city / temperature / condition block to the right of the dates. Hidden until the first forecast. */
     private void buildWidget(Activity a) {
@@ -147,9 +150,72 @@ final class WeatherFx extends View {
             lp.setMarginStart((int) (36 * density));
             lp.gravity = android.view.Gravity.CENTER_VERTICAL;
             ((android.widget.LinearLayout) band).addView(wBox, lp);
+            aBox = new android.widget.LinearLayout(a);
+            aBox.setOrientation(android.widget.LinearLayout.VERTICAL);
+            aBox.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+            aHead = new android.widget.TextView(a);
+            aHead.setTextColor(0x99FFFFFF);
+            aHead.setTextSize(11);
+            aHead.setTypeface(Fonts.outfit(a, 400));
+            aNum = new android.widget.TextView(a);
+            aNum.setTextSize(30);
+            aNum.setIncludeFontPadding(false);
+            aNum.setTypeface(Fonts.outfit(a, 300));
+            aCond = new android.widget.TextView(a);
+            aCond.setTextColor(0xB3FFFFFF);
+            aCond.setTextSize(13);
+            aCond.setTypeface(Fonts.outfit(a, 400));
+            aBox.addView(aHead);
+            aBox.addView(aNum);
+            aBox.addView(aCond);
+            aBox.setVisibility(View.GONE);
+            android.widget.LinearLayout.LayoutParams lp2 = new android.widget.LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp2.setMarginStart((int) (30 * density));
+            lp2.gravity = android.view.Gravity.CENTER_VERTICAL;
+            ((android.widget.LinearLayout) band).addView(aBox, lp2);
         } catch (RuntimeException e) {
             android.util.Log.w("TvHome", "weather widget build failed", e);
             wBox = null;
+        }
+    }
+
+    private void showAqi(int aqi, String label) {
+        if (aqi < 0) return;
+        if (aBox == null && wBox == null && getContext() instanceof Activity) buildWidget((Activity) getContext());
+        if (aBox == null) return;
+        int color;
+        String text;
+        if (aqi <= 50) { color = 0xFF34C759; text = "Baik"; }
+        else if (aqi <= 100) { color = 0xFFFFD60A; text = "Sederhana"; }
+        else if (aqi <= 200) { color = 0xFFFF9F0A; text = "Tidak sihat"; }
+        else if (aqi <= 300) { color = 0xFFFF453A; text = "Sangat tidak sihat"; }
+        else { color = 0xFFBF5AF2; text = "Berbahaya"; }
+        aHead.setText(label);
+        aNum.setTextColor(color);
+        aNum.setText(String.valueOf(aqi));
+        aCond.setText(text);
+        aBox.setVisibility(View.VISIBLE);
+    }
+
+    private static String httpGet(String u) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(u).openConnection();
+            c.setConnectTimeout(8_000);
+            c.setReadTimeout(8_000);
+            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/120 Safari/537.36");
+            c.setRequestProperty("Accept", "application/json, text/plain, */*");
+            if (c.getResponseCode() != 200) return null;
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), StandardCharsets.UTF_8))) {
+                for (String line; (line = r.readLine()) != null; ) sb.append(line);
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
         }
     }
 
@@ -220,6 +286,30 @@ final class WeatherFx extends View {
             } finally {
                 if (c != null) c.disconnect();
             }
+            int aqiVal = -1;
+            String aqiTxt = "";
+            try {
+                String body = httpGet("https://eqms.doe.gov.my/api3/publicportalapims/currentapicurrentlocation?stationid=" + AQI_STATION);
+                if (body != null) {
+                    org.json.JSONArray arr = new JSONObject(body).optJSONArray("data");
+                    if (arr != null && arr.length() > 0) {
+                        aqiVal = arr.getJSONObject(0).optInt("API", -1);
+                        aqiTxt = "API · LARKIN";
+                    }
+                }
+                if (aqiVal < 0) {
+                    body = httpGet("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" + LAT + "&longitude=" + LON + "&current=us_aqi");
+                    if (body != null) {
+                        aqiVal = new JSONObject(body).getJSONObject("current").optInt("us_aqi", -1);
+                        aqiTxt = "AQI · ANGGARAN";
+                    }
+                }
+            } catch (Exception e) {
+                android.util.Log.w("TvHome", "air quality failed", e);
+            }
+            android.util.Log.i("TvHome", "air quality " + aqiVal + " " + aqiTxt);
+            final int aqF = aqiVal;
+            final String aqL = aqiTxt;
             final int result = code, tmp = temp;
             post(() -> {
                 fetching = false;
@@ -235,6 +325,7 @@ final class WeatherFx extends View {
                     lastFetch = System.currentTimeMillis() - REFRESH_MS + RETRY_MS; // try again soon
                 }
                 applyLook();
+                showAqi(aqF, aqL);
             });
         }, "weather-fetch").start();
     }
