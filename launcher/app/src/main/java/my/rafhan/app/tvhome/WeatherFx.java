@@ -130,16 +130,16 @@ final class WeatherFx extends View {
             android.widget.TextView city = new android.widget.TextView(a);
             city.setText("SKUDAI");
             city.setTextColor(0x99FFFFFF);
-            city.setTextSize(11);
+            city.setTextSize(9);
             city.setTypeface(Fonts.outfit(a, 400));
             wTemp = new android.widget.TextView(a);
             wTemp.setTextColor(0xFFFFFFFF);
-            wTemp.setTextSize(30);
+            wTemp.setTextSize(22);
             wTemp.setIncludeFontPadding(false);
             wTemp.setTypeface(Fonts.outfit(a, 300));
             wCond = new android.widget.TextView(a);
             wCond.setTextColor(0xB3FFFFFF);
-            wCond.setTextSize(13);
+            wCond.setTextSize(11);
             wCond.setTypeface(Fonts.outfit(a, 400));
             wBox.addView(city);
             wBox.addView(wTemp);
@@ -147,7 +147,7 @@ final class WeatherFx extends View {
             wBox.setVisibility(View.GONE);
             android.widget.LinearLayout.LayoutParams lp = new android.widget.LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMarginStart((int) (36 * density));
+            lp.setMarginStart((int) (26 * density));
             lp.gravity = android.view.Gravity.CENTER_VERTICAL;
             ((android.widget.LinearLayout) band).addView(wBox, lp);
             aBox = new android.widget.LinearLayout(a);
@@ -155,15 +155,15 @@ final class WeatherFx extends View {
             aBox.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
             aHead = new android.widget.TextView(a);
             aHead.setTextColor(0x99FFFFFF);
-            aHead.setTextSize(11);
+            aHead.setTextSize(9);
             aHead.setTypeface(Fonts.outfit(a, 400));
             aNum = new android.widget.TextView(a);
-            aNum.setTextSize(30);
+            aNum.setTextSize(22);
             aNum.setIncludeFontPadding(false);
             aNum.setTypeface(Fonts.outfit(a, 300));
             aCond = new android.widget.TextView(a);
             aCond.setTextColor(0xB3FFFFFF);
-            aCond.setTextSize(13);
+            aCond.setTextSize(11);
             aCond.setTypeface(Fonts.outfit(a, 400));
             aBox.addView(aHead);
             aBox.addView(aNum);
@@ -171,7 +171,7 @@ final class WeatherFx extends View {
             aBox.setVisibility(View.GONE);
             android.widget.LinearLayout.LayoutParams lp2 = new android.widget.LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp2.setMarginStart((int) (30 * density));
+            lp2.setMarginStart((int) (22 * density));
             lp2.gravity = android.view.Gravity.CENTER_VERTICAL;
             ((android.widget.LinearLayout) band).addView(aBox, lp2);
         } catch (RuntimeException e) {

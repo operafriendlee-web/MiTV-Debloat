@@ -294,6 +294,7 @@ public class MainActivity extends Activity {
         clock.setTypeface(Fonts.outfit(this, 200));
         date.setTypeface(Fonts.outfit(this, 400));
         hero.setTypeface(Fonts.outfit(this, 300));
+hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICAL); findViewById(R.id.dockBand).addOnLayoutChangeListener((dbV, dbL, dbT, dbR, dbB, dbOl, dbOt, dbOr, dbOb) -> { int pad = Math.max(0, dbL) + px(16); if (hero.getPaddingStart() != pad) hero.setPadding(pad, 0, px(64), 0); });
         for (View p : pills) ((ImageView) p).setImageTintList(android.content.res.ColorStateList.valueOf(0xE6FFFFFF));
         Alerts.get().addListener(alertsChanged);
         updateBell();
