@@ -5,9 +5,11 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -23,7 +25,7 @@ import java.util.Calendar;
 import java.util.TimeZone;
 
 /**
- * Daily ayat card under the left cards on Home: one short verse a day (Malaysian time) with its
+ * Daily ayat card under the System card on Home: one short verse a day (Malaysian time) with its
  * Uthmani text and Abdullah Muhammad Basmeih's Malay translation from Quran.com, fetched once a day
  * and kept. The verse list and the Quran.com approach follow Glass TV Home (MIT, (c) 2026 Gathin).
  */
@@ -43,6 +45,7 @@ final class DailyAyah {
     private LinearLayout card;
     private TextView head, arabic, malay;
     private boolean fetching;
+    private float density = 1f;
 
     static void attach(Activity a) {
         try {
@@ -54,14 +57,16 @@ final class DailyAyah {
 
     private DailyAyah(Activity a) {
         ctx = a;
-        View panel = a.findViewById(R.id.prayerPanel);
-        if (panel == null || !(panel.getParent() instanceof LinearLayout)) throw new IllegalStateException("no left column");
+        final View sys = a.findViewById(R.id.sysPanel);
+        final View np = a.findViewById(R.id.nowPlaying);
+        if (sys == null || !(sys.getParent() instanceof FrameLayout)) throw new IllegalStateException("no system card");
         final float d = a.getResources().getDisplayMetrics().density;
+        density = d;
 
         card = new LinearLayout(a);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setBackground(a.getDrawable(R.drawable.sys_bg));
-        card.setPadding((int) (14 * d), (int) (10 * d), (int) (14 * d), (int) (11 * d));
+        card.setPadding((int) (14 * d), (int) (8 * d), (int) (14 * d), (int) (8 * d));
 
         head = new TextView(a);
         head.setTextSize(10);
@@ -69,37 +74,64 @@ final class DailyAyah {
         head.setLetterSpacing(0.08f);
         head.setTypeface(Fonts.outfit(a, 400));
 
+        // Gold Arabic, one line that shrinks to fit so the card stays short.
         arabic = new TextView(a);
-        arabic.setTextSize(17);
-        arabic.setTextColor(Color.WHITE);
-        arabic.setMaxLines(2);
+        arabic.setTextColor(0xFFE6C068);
+        arabic.setMaxLines(1);
         arabic.setEllipsize(android.text.TextUtils.TruncateAt.END);
         arabic.setTextDirection(View.TEXT_DIRECTION_RTL);
         arabic.setGravity(Gravity.END);
+        arabic.setAutoSizeTextTypeUniformWithConfiguration(11, 17, 1, TypedValue.COMPLEX_UNIT_SP);
 
+        // White translation.
         malay = new TextView(a);
-        malay.setTextSize(11);
-        malay.setTextColor(0xCCFFFFFF);
+        malay.setTextSize(10);
+        malay.setTextColor(Color.WHITE);
         malay.setMaxLines(3);
         malay.setEllipsize(android.text.TextUtils.TruncateAt.END);
         malay.setTypeface(Fonts.outfit(a, 400));
 
         LinearLayout.LayoutParams lpA = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpA.topMargin = (int) (4 * d);
+        lpA.topMargin = (int) (2 * d);
         LinearLayout.LayoutParams lpM = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpM.topMargin = (int) (3 * d);
+        lpM.topMargin = (int) (2 * d);
         card.addView(head);
         card.addView(arabic, lpA);
         card.addView(malay, lpM);
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams((int) (330 * d), ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = (int) (10 * d);
-        ((LinearLayout) panel.getParent()).addView(card, lp);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                (int) (410 * d), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+        lp.topMargin = (int) (260 * d);
+        lp.setMarginEnd((int) (64 * d));
+        ((ViewGroup) sys.getParent()).addView(card, lp);
+
+        // Follows the System card (same width and right edge, just under it); hidden while Now Playing is up.
+        sys.getViewTreeObserver().addOnGlobalLayoutListener(() -> place(sys, np));
 
         showKept();
         card.post(poll);
+    }
+
+    private void place(View sys, View np) {
+        if (card == null) return;
+        boolean playing = np != null && np.getVisibility() == View.VISIBLE;
+        int want = playing ? View.GONE : View.VISIBLE;
+        if (card.getVisibility() != want) card.setVisibility(want);
+        if (playing) return;
+        boolean below = sys.getVisibility() != View.GONE;
+        if (below && sys.getBottom() == 0) return; // not laid out yet
+        ViewGroup.MarginLayoutParams sp = (ViewGroup.MarginLayoutParams) sys.getLayoutParams();
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) card.getLayoutParams();
+        int top = (below ? sys.getBottom() : sp.topMargin) + (int) (6 * density);
+        int width = sp.width > 0 ? sp.width : sys.getWidth();
+        if (lp.width != width || lp.getMarginEnd() != sp.getMarginEnd() || lp.topMargin != top) {
+            lp.width = width;
+            lp.setMarginEnd(sp.getMarginEnd());
+            lp.topMargin = top;
+            card.post(() -> card.setLayoutParams(lp));
+        }
     }
 
     private final Runnable poll = new Runnable() {
