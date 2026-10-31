@@ -42,7 +42,7 @@ final class PrayerPanel {
     private static final String API =
             "https://www.e-solat.gov.my/index.php?r=esolatApi/takwimsolat&period=month&zone=";
     private static final String[] KEYS = {"fajr", "dhuhr", "asr", "maghrib", "isha"};
-    static final String[] NAMES = {"Fajr", "Dhuhr", "Asr", "Maghrib", "Isya"};
+    static final String[] NAMES = {"Subuh", "Zohor", "Asar", "Maghrib", "Isyak"};
     private static final String[] HIJRI_MONTHS = {"Muharam", "Safar", "Rabiulawal", "Rabiulakhir",
             "Jamadilawal", "Jamadilakhir", "Rejab", "Syaaban", "Ramadan", "Syawal", "Zulkaedah", "Zulhijjah"};
     // e-solat dates use Malay month abbreviations: "20-Okt-2026".
@@ -184,7 +184,7 @@ final class PrayerPanel {
         if (target != null) {
             long mins = (long) Math.ceil(Duration.between(LocalDateTime.of(today, now), target).getSeconds() / 60.0);
             long h = mins / 60, m = mins % 60;
-            countdown.setText(NAMES[next] + " in " + (h > 0 ? h + "h " + m + "m" : m + "m"));
+            countdown.setText(NAMES[next] + " dalam " + (h > 0 ? h + "h " + m + "m" : m + "m"));
         } else {
             countdown.setText("");
         }
