@@ -181,7 +181,7 @@ final class WeatherFx extends View {
     }
 
     private void showAqi(int aqi, String label) {
-        if (aqi < 0) return;
+        if (true || aqi < 0) return;
         if (aBox == null && wBox == null && getContext() instanceof Activity) buildWidget((Activity) getContext());
         if (aBox == null) return;
         int color;
