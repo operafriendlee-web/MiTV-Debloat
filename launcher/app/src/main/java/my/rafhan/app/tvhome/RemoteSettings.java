@@ -54,6 +54,8 @@ final class RemoteSettings {
                 choice(LauncherSettings.CLOCK, "Clock", "Auto follows the TV's own setting",
                         new int[] {LauncherSettings.CLOCK_AUTO, LauncherSettings.CLOCK_12, LauncherSettings.CLOCK_24},
                         new String[] {"Auto", "12-hour", "24-hour"}),
+                choice(LauncherSettings.APPS_PER_ROW, "Apps per row", "The dock and the app list. More apps, smaller tiles",
+                        new int[] {5, 6, 7}, new String[] {"5", "6", "7"}),
                 toggle(LauncherSettings.SHOW_SYSTEM, "System card", "CPU, RAM, storage, network and USB debugging"),
                 toggle(LauncherSettings.SHOW_NOW, "Now Playing card", "Cover, title and controls while something plays"),
                 choice(LauncherSettings.WALL_DIM, "Wallpaper dim", "How dark the wallpaper is behind the cards",
@@ -72,22 +74,26 @@ final class RemoteSettings {
                         "A banner over any app, without sound, while the TV is on",
                         new int[] {0, 5, 10, 15, 30}, new String[] {"Off", "5 min", "10 min", "15 min", "30 min"}),
                 row("action", LauncherSettings.AZAN_TEST, "Play azan now", "Hear it on the TV and check the volume")));
+        cats.put(category("Weather", "Forecast and air quality",
+                toggle(LauncherSettings.SHOW_WEATHER, "Weather card",
+                        "Today's forecast and air quality on the home screen")));
         cats.put(category("Most used", "Your top apps this week",
                 toggle(LauncherSettings.SHOW_USAGE, "Most used card", "Your top 5 apps this week on the home screen"),
                 choice(LauncherSettings.WEEK_START, "Week starts on", "Counts from this day up to today",
                         new int[] {1, 7}, new String[] {"Monday", "Sunday"}),
                 row("apps", LauncherSettings.USAGE_EXCLUDED, "Leave out",
-                        "Apps that don't count, like Live TV (it's only the HDMI and antenna screen)")
-                        .put("value", new JSONArray(LauncherSettings.usageExcluded(ctx)))));
+                        "Not on the card, like Live TV (it's only the HDMI and antenna screen)")
+                        .put("value", new JSONArray(LauncherSettings.usageExcludedPresent(ctx)))));
         cats.put(category("Notifications", "What the bell tells you",
-                toggle(LauncherSettings.ALERT_PLAY, "Play Store updates", "Checked every 6 hours"),
+                toggle(LauncherSettings.ALERT_UPDATE, "TV Home updates", "Checked every 6 hours"),
+                toggle(LauncherSettings.ALERT_PLAY, "Play Store updates", "Apps with an update waiting, checked every hour"),
                 toggle(LauncherSettings.ALERT_HDMI, "New HDMI devices", "A device that appears over HDMI-CEC"),
                 toggle(LauncherSettings.ALERT_BT, "Bluetooth devices", "Connecting or disconnecting (not the TV remote)"),
+                toggle(LauncherSettings.NET_BANNER, "Connection status",
+                        "Wi-Fi connected, disconnected or no internet, over any app"),
                 toggle(LauncherSettings.ALERT_MEMORY, "Low memory", "When RAM use passes the level below"),
                 choice(LauncherSettings.MEMORY_LEVEL, "Low-memory level", "Alerts again after dropping 5 points under it",
-                        new int[] {80, 85, 90}, new String[] {"80 %", "85 %", "90 %"}),
-                toggle(LauncherSettings.NET_BANNER, "Connection banner",
-                        "Wi-Fi connected, disconnected or no internet, over any app")));
+                        new int[] {80, 85, 90}, new String[] {"80 %", "85 %", "90 %"})));
         cats.put(category("Info overlay", "Speed, uptime and clock over apps",
                 toggle(LauncherSettings.STATUS_BAR, "Show over apps",
                         "A thin bar over every app, never on the home screen"),
@@ -99,7 +105,7 @@ final class RemoteSettings {
                         StatusOverlay.SLOT_VALUES, StatusOverlay.SLOT_NAMES),
                 choice(LauncherSettings.STATUS_POS, "Position", "Top or bottom edge of the screen",
                         StatusOverlay.POS_VALUES, StatusOverlay.POS_NAMES),
-                choice(LauncherSettings.STATUS_SIZE, "Text size", "Small 12, Medium 14, Large 18",
+                choice(LauncherSettings.STATUS_SIZE, "Text size", "Tiny 10, Small 12, Medium 14, Large 18",
                         StatusOverlay.SIZE_VALUES, StatusOverlay.SIZE_NAMES),
                 toggle(LauncherSettings.STATUS_BG, "Background", "A dark see-through box behind the text")));
         return new JSONObject().put("ok", true).put("categories", cats);

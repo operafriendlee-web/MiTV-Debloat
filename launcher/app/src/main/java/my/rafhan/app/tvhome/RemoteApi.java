@@ -24,9 +24,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The phone remote's API: the routes below {@code /} and the actions behind them (keys, apps,
@@ -337,6 +339,24 @@ final class RemoteApi {
             case "/api/devices":
                 Http.json(out, 200, new Http.JSONObjectBuilder().put("ok", true).put("devices", devices.json(token)).build());
                 return;
+            case "/api/devices/rename":
+                // {"name": "..."}: this phone's name in the list (it can only rename itself).
+                if (Http.post(method, out)) {
+                    String name;
+                    try {
+                        name = new JSONObject(new String(body, StandardCharsets.UTF_8)).optString("name").trim();
+                    } catch (JSONException e) {
+                        Http.json(out, 400, Http.err("Bad request."));
+                        return;
+                    }
+                    if (name.isEmpty()) {
+                        Http.json(out, 400, Http.err("Type a name."));
+                        return;
+                    }
+                    devices.rename(token, RemoteDevices.name(headers.get("user-agent"), name));
+                    Http.json(out, 200, Http.ok());
+                }
+                return;
             case "/api/devices/revoke":
                 if (Http.post(method, out)) {
                     String id;
@@ -382,9 +402,11 @@ final class RemoteApi {
             overlay.hide();
             return new Object[] {429, Http.err("Too many wrong PINs. Try again in " + (wait / 1000) + "s.")};
         }
-        String given;
+        String given, name;
         try {
-            given = new JSONObject(new String(body, StandardCharsets.UTF_8)).optString("pin");
+            JSONObject o = new JSONObject(new String(body, StandardCharsets.UTF_8));
+            given = o.optString("pin");
+            name = o.optString("name"); // typed on the pairing screen, optional
         } catch (JSONException e) {
             return new Object[] {400, Http.err("Bad request.")};
         }
@@ -392,7 +414,7 @@ final class RemoteApi {
             case OK: {
                 overlay.hide();
                 String token = randomToken();
-                devices.add(token, RemoteDevices.name(userAgent));
+                devices.add(token, RemoteDevices.name(userAgent, name));
                 return new Object[] {200, new Http.JSONObjectBuilder().put("ok", true).put("token", token).build()};
             }
             case LOCKED:
@@ -428,12 +450,12 @@ final class RemoteApi {
             List<AppEntry> ordered = new ArrayList<>();
             for (String pkg : DockConfig.load(ctx)) {
                 AppEntry e = byPkg.get(pkg);
-                if (e != null && !ordered.contains(e) && ordered.size() < DockConfig.MAX) ordered.add(e);
+                if (e != null && !ordered.contains(e) && ordered.size() < DockConfig.size(ctx)) ordered.add(e);
             }
             appCacheDock = ordered.size();
             List<AppEntry> rest = new ArrayList<>(all);
             rest.removeAll(ordered);
-            UsageScores.sort(rest, UsageScores.week(ctx));
+            UsageScores.sort(rest, UsageScores.allTime(ctx)); // same order as the TV's grid
             ordered.addAll(rest);
             appCache = ordered;
             appCacheAt = now;
@@ -447,12 +469,16 @@ final class RemoteApi {
         return null;
     }
 
-    /** {"pkgs":[...]}: the new dock, left to right (installed launchable apps only, at most 5). */
+    /**
+     * {"pkgs":[...]}: the new dock, left to right (installed launchable apps only, at most "apps
+     * per row"). Apps a lower "apps per row" hides are kept after them, as on the TV.
+     */
     private Object[] saveDock(byte[] body) {
         try {
             JSONArray arr = new JSONObject(new String(body, StandardCharsets.UTF_8)).getJSONArray("pkgs");
-            if (arr.length() > DockConfig.MAX) return new Object[] {400, Http.err("The dock holds up to " + DockConfig.MAX + " apps.")};
-            List<String> known = new ArrayList<>();
+            int max = DockConfig.size(ctx);
+            if (arr.length() > max) return new Object[] {400, Http.err("The dock holds up to " + max + " apps.")};
+            Set<String> known = new HashSet<>();
             for (AppEntry e : AppRepository.load(ctx)) known.add(e.pkg);
             List<String> pkgs = new ArrayList<>();
             for (int i = 0; i < arr.length(); i++) {
@@ -460,6 +486,9 @@ final class RemoteApi {
                 if (!known.contains(p)) return new Object[] {400, Http.err("Unknown app: " + p)};
                 if (!pkgs.contains(p)) pkgs.add(p);
             }
+            List<String> saved = DockConfig.load(ctx), shownBefore = new ArrayList<>();
+            for (String p : saved) if (known.contains(p) && shownBefore.size() < max && !shownBefore.contains(p)) shownBefore.add(p);
+            pkgs = DockConfig.keepHidden(pkgs, saved, shownBefore, known);
             if (!DockConfig.save(ctx, pkgs)) return new Object[] {500, Http.err("Couldn't save the dock.")};
             synchronized (this) {
                 appCache = null;
@@ -481,7 +510,7 @@ final class RemoteApi {
             AppEntry e = list.get(i);
             arr.put(new Http.JSONObjectBuilder().put("pkg", e.pkg).put("label", e.label).put("dock", i < dock).build());
         }
-        return new Http.JSONObjectBuilder().put("ok", true).put("apps", arr).build();
+        return new Http.JSONObjectBuilder().put("ok", true).put("apps", arr).put("dockMax", DockConfig.size(ctx)).build();
     }
 
     private byte[] banner(String pkg) {
@@ -755,16 +784,24 @@ final class RemoteApi {
                 return new Object[] {200, Http.ok()};
             case "volup":
                 am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI);
-                return new Object[] {200, Http.ok()};
+                return new Object[] {200, volume(am)};
             case "voldown":
                 am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI);
-                return new Object[] {200, Http.ok()};
+                return new Object[] {200, volume(am)};
             case "mute":
                 am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_TOGGLE_MUTE, AudioManager.FLAG_SHOW_UI);
-                return new Object[] {200, Http.ok()};
+                return new Object[] {200, volume(am)};
             default:
                 return new Object[] {400, Http.err("Unknown key.")};
         }
+    }
+
+    /** The TV's volume after a volume key, so the phone can show the number. */
+    private static JSONObject volume(AudioManager am) {
+        return new Http.JSONObjectBuilder().put("ok", true)
+                .put("volume", am.getStreamVolume(AudioManager.STREAM_MUSIC))
+                .put("max", am.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+                .put("muted", am.isStreamMute(AudioManager.STREAM_MUSIC)).build();
     }
 
     private static void media(AudioManager am, int code) {

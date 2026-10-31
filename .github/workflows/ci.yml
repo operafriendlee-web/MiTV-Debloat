@@ -61,10 +61,101 @@ jobs:
           path: launcher/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
-  # Tag v<versionName> → a GitHub Release with tvhome-<version>.apk, downloadable without signing in.
+  # The terminal app (tui/): checked and built for every desktop platform. Intel Macs are
+  # cross-compiled on Apple Silicon (GitHub no longer has Intel Mac runners), so their tests run
+  # only as the arm64 build.
+  tui:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu, exe: tvhome-tui, test: true }
+          - { os: macos-14, target: aarch64-apple-darwin, exe: tvhome-tui, test: true }
+          - { os: macos-14, target: x86_64-apple-darwin, exe: tvhome-tui, test: false }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, exe: tvhome-tui.exe, test: true }
+          # Android phones, in Termux: 64-bit, and 32-bit for older phones. Built with the
+          # runner's Android NDK; API 24 (Android 7.0) is Termux's minimum.
+          - { os: ubuntu-latest, target: aarch64-linux-android, ndk: aarch64-linux-android24, exe: tvhome-tui, test: false }
+          - { os: ubuntu-latest, target: armv7-linux-androideabi, ndk: armv7a-linux-androideabi24, exe: tvhome-tui, test: false }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy, rustfmt, llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tui
+          key: ${{ matrix.target }}
+
+      - name: Android NDK compiler
+        if: matrix.ndk
+        run: |
+          BIN="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          T="$(echo '${{ matrix.target }}' | tr 'a-z-' 'A-Z_')"
+          t="$(echo '${{ matrix.target }}' | tr '-' '_')"
+          {
+            echo "CC_$t=$BIN/${{ matrix.ndk }}-clang"
+            echo "AR_$t=$BIN/llvm-ar"
+            echo "CARGO_TARGET_${T}_LINKER=$BIN/${{ matrix.ndk }}-clang"
+          } >> "$GITHUB_ENV"
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --target ${{ matrix.target }} -- -D warnings
+
+      - name: Tests
+        if: matrix.test
+        run: cargo test --target ${{ matrix.target }}
+
+      - name: Release build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # Cargo's strip=true is a fallback; explicitly strip the uploaded binary on each host.
+      # Android binaries need the NDK's ELF-aware tool, not the Linux host's strip.
+      - name: Strip Linux / Android release binary
+        if: runner.os == 'Linux'
+        run: |
+          binary="target/${{ matrix.target }}/release/${{ matrix.exe }}"
+          if [ -n '${{ matrix.ndk }}' ]; then
+            "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$binary"
+          else
+            strip --strip-unneeded "$binary"
+          fi
+
+      # On macOS, the system stripper also works when rust-objcopy cannot load libLLVM.dylib.
+      - name: Strip macOS release binary
+        if: runner.os == 'macOS'
+        run: strip -S -x target/${{ matrix.target }}/release/${{ matrix.exe }}
+
+      - name: Strip Windows release executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $sysroot = (rustc --print sysroot).Trim()
+          $strip = Join-Path $sysroot 'lib/rustlib/${{ matrix.target }}/bin/llvm-strip.exe'
+          & $strip --strip-unneeded 'target/${{ matrix.target }}/release/${{ matrix.exe }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tvhome-tui-${{ matrix.target }}
+          path: tui/target/${{ matrix.target }}/release/${{ matrix.exe }}
+          if-no-files-found: error
+
+  # Tag v<versionName> → a GitHub Release with tvhome-<version>.apk and the terminal app for each
+  # platform, downloadable without signing in.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, tui]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -96,11 +187,34 @@ jobs:
         with:
           name: app-release
 
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tvhome-tui-*
+          path: tui-bin
+
+      # One archive per platform: .zip for Windows, .tar.gz (executable bit restored) elsewhere.
+      - name: Package the terminal app
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          for dir in tui-bin/tvhome-tui-*; do
+            target="${dir#tui-bin/tvhome-tui-}"
+            name="tvhome-tui-$VERSION-$target"
+            if [ -f "$dir/tvhome-tui.exe" ]; then
+              (cd "$dir" && zip -q "$GITHUB_WORKSPACE/dist/$name.zip" tvhome-tui.exe)
+            else
+              chmod +x "$dir/tvhome-tui"
+              tar -czf "dist/$name.tar.gz" -C "$dir" tvhome-tui
+            fi
+          done
+          ls -l dist
+
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           mv app-release.apk "tvhome-$VERSION.apk"
-          gh release create "$GITHUB_REF_NAME" "tvhome-$VERSION.apk" \
+          gh release create "$GITHUB_REF_NAME" "tvhome-$VERSION.apk" dist/* \
             --title "TV Home $VERSION" --generate-notes

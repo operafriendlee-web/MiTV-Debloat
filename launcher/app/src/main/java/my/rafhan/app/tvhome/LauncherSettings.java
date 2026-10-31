@@ -2,6 +2,7 @@ package my.rafhan.app.tvhome;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.format.DateFormat;
@@ -21,14 +22,27 @@ final class LauncherSettings {
     static final String ZONE = "prayer_zone", SHOW_PRAYER = "show_prayer", SHOW_USAGE = "show_usage",
             SHOW_SYSTEM = "show_system", SHOW_NOW = "show_now_playing", CLOCK = "clock",
             USAGE_EXCLUDED = "usage_excluded", WALL_DIM = "wallpaper_dim",
-            ALERT_PLAY = "alert_play", ALERT_HDMI = "alert_hdmi", ALERT_BT = "alert_bluetooth",
+            ALERT_UPDATE = "alert_update", ALERT_PLAY = "alert_play", ALERT_HDMI = "alert_hdmi", ALERT_BT = "alert_bluetooth",
             ALERT_MEMORY = "alert_memory", MEMORY_LEVEL = "memory_level", NET_BANNER = "net_banner",
             REMOTE = "remote_on", WALLPAPER = "wallpaper", WEEK_START = "week_start",
             AZAN = "azan", AZAN_TEST = "azan_test",
             PRAYER_REMINDER = "prayer_reminder",
             STATUS_BAR = "status_bar", STATUS_LEFT = "status_left", STATUS_CENTER = "status_center",
             STATUS_RIGHT = "status_right", STATUS_POS = "status_position", STATUS_SIZE = "status_size",
-            STATUS_BG = "status_background";
+            STATUS_BG = "status_background", APPS_PER_ROW = "apps_per_row";
+    // The Weather card (Settings → Weather): on/off, MET place id ("" = Auto), APIMS station id ("" = Nearest).
+    static final String SHOW_WEATHER = "show_weather", WEATHER_PLACE = "weather_place",
+            WEATHER_STATION = "weather_station";
+    // The Globe screen saver's layers (Settings → Screen saver, when Globe is the one shown).
+    static final String GLOBE_PRAYER_LINES = "globe_prayer_lines", GLOBE_MAKKAH = "globe_makkah",
+            GLOBE_ZONE = "globe_zone", GLOBE_CITY_LIGHTS = "globe_city_lights", GLOBE_CLOUDS = "globe_clouds",
+            GLOBE_SNOW = "globe_snow", GLOBE_AURORA = "globe_aurora", GLOBE_EDITS = "globe_edits",
+            GLOBE_QUAKES = "globe_quakes", GLOBE_ISS = "globe_iss", GLOBE_TIANGONG = "globe_tiangong",
+            GLOBE_HUBBLE = "globe_hubble", GLOBE_LEGEND = "globe_legend", GLOBE_WIND = "globe_wind",
+            GLOBE_GLINT = "globe_glint", GLOBE_RIM = "globe_rim", GLOBE_SKY = "globe_sky";
+    /** How the Globe turns on its own (a choice): SPIN_TWO_MINUTES or SPIN_REAL_TIME. */
+    static final String GLOBE_SPIN = "globe_spin";
+    static final int SPIN_TWO_MINUTES = 0, SPIN_REAL_TIME = 1;
 
     /** What a status-bar slot shows. */
     static final int SLOT_NONE = 0, SLOT_SPEED = 1, SLOT_UPTIME = 2, SLOT_CLOCK = 3, SLOT_ELAPSED = 4;
@@ -74,9 +88,12 @@ final class LauncherSettings {
         return prefs(ctx).getBoolean(key, defaultFlag(key));
     }
 
-    /** Every switch starts on, except the info overlay: it would double up with an overlay app. */
+    /**
+     * Every switch starts on, except the info overlay (it would double up with an overlay app)
+     * and the Globe's clouds and wind (clouds cover much of the map; wind also takes more CPU).
+     */
     private static boolean defaultFlag(String key) {
-        return !STATUS_BAR.equals(key);
+        return !STATUS_BAR.equals(key) && !GLOBE_CLOUDS.equals(key) && !GLOBE_WIND.equals(key);
     }
 
     static void setFlag(Context ctx, String key, boolean on) {
@@ -85,7 +102,9 @@ final class LauncherSettings {
     }
 
     static int choice(Context ctx, String key) {
-        return prefs(ctx).getInt(key, defaultChoice(key));
+        int v = prefs(ctx).getInt(key, defaultChoice(key));
+        // Apps per row once also offered 4: a saved 4 reads as 5, the smallest now.
+        return APPS_PER_ROW.equals(key) ? Math.max(5, Math.min(7, v)) : v;
     }
 
     static void setChoice(Context ctx, String key, int value) {
@@ -103,6 +122,7 @@ final class LauncherSettings {
             case STATUS_CENTER: return SLOT_UPTIME;
             case STATUS_RIGHT: return SLOT_CLOCK;
             case STATUS_SIZE: return 12;  // sp: Small
+            case APPS_PER_ROW: return 5;  // the dock and each app-list row
             default: return 0;
         }
     }
@@ -116,6 +136,26 @@ final class LauncherSettings {
     static void setZone(Context ctx, String zone) {
         prefs(ctx).edit().putString(ZONE, zone).apply();
         changed(ZONE);
+    }
+
+    /** The MET forecast place's id ("Tn181"), or "" for Auto: the prayer zone's town. */
+    static String weatherPlace(Context ctx) {
+        return prefs(ctx).getString(WEATHER_PLACE, "");
+    }
+
+    static void setWeatherPlace(Context ctx, String id) {
+        prefs(ctx).edit().putString(WEATHER_PLACE, id).apply();
+        changed(WEATHER_PLACE);
+    }
+
+    /** The APIMS station's id ("CA21B"), or "" for Nearest: the one closest to the prayer zone. */
+    static String weatherStation(Context ctx) {
+        return prefs(ctx).getString(WEATHER_STATION, "");
+    }
+
+    static void setWeatherStation(Context ctx, String id) {
+        prefs(ctx).edit().putString(WEATHER_STATION, id).apply();
+        changed(WEATHER_STATION);
     }
 
     /**
@@ -148,6 +188,21 @@ final class LauncherSettings {
         Set<String> s = prefs(ctx).getStringSet(USAGE_EXCLUDED, null);
         return s != null ? new HashSet<>(s)
                 : new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.usage_excluded)));
+    }
+
+    /**
+     * The left-out apps that are on the TV (installed and switched on), as the pickers list them.
+     * Uninstalled ones stay saved, so a reinstalled app is still left out.
+     */
+    static Set<String> usageExcludedPresent(Context ctx) {
+        Set<String> on = new HashSet<>();
+        for (String pkg : usageExcluded(ctx)) {
+            try {
+                if (ctx.getPackageManager().getApplicationInfo(pkg, 0).enabled) on.add(pkg);
+            } catch (PackageManager.NameNotFoundException ignored) {
+            }
+        }
+        return on;
     }
 
     static void setUsageExcluded(Context ctx, String pkg, boolean excluded) {

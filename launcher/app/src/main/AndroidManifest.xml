@@ -6,6 +6,8 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- TV Home updates from GitHub, installed with Android's installer after the user confirms. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Bell: Bluetooth devices connecting / disconnecting. BLUETOOTH alone is enough up to
          Android 11; 12+ needs the runtime permission below for names and the ACL broadcasts, and
          MainActivity asks for it at start (a TV without Bluetooth just never asks). -->
@@ -41,6 +43,16 @@
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
+    <!-- Settings → Home screen → Screen saver picks the TV's screen saver itself (ScreenSaver):
+         some TVs can't open their screen-saver page from another app. Granted over ADB. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+    <!-- Bell: apps with an update waiting, from the Play Store's log lines (PlayUpdates). A
+         development permission, granted over ADB like DUMP; only used below Android 13. -->
+    <uses-permission
+        android:name="android.permission.READ_LOGS"
+        tools:ignore="ProtectedPermissions" />
     <!-- Now Playing card without USB debugging: read `dumpsys media_session`. A development
          permission, granted over ADB by build-and-install.sh. -->
     <uses-permission
@@ -77,6 +89,10 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="*/*" />
         </intent>
+        <!-- Settings → Screen saver lists every screen saver on the TV. -->
+        <intent>
+            <action android:name="android.service.dreams.DreamService" />
+        </intent>
     </queries>
 
     <application
@@ -106,6 +122,60 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Screen savers (TV Home's Settings → Screen saver, or the TV's): a clock with the dates
+             and prayer times (also what the others show while they can't run), the TV's live log
+             on black, and the Earth turning with the prayer lines and live dots. -->
+        <service
+            android:name=".ClockDream"
+            android:exported="true"
+            android:label="Prayer time"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".LogDream"
+            android:exported="true"
+            android:label="Live log"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+        <service
+            android:name=".GlobeDream"
+            android:exported="true"
+            android:label="Globe"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+        <!-- The remote's Input button (RemoteAccessibilityService catches it), and Android TV's
+             "show inputs" when asked for without naming the (disabled) stock TV launcher. -->
+        <activity
+            android:name=".InputsActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="com.android.tv.action.VIEW_INPUTS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".UpdateActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/UpdateTheme" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

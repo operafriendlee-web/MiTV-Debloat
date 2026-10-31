@@ -6,6 +6,7 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
@@ -42,14 +43,17 @@ final class SettingsScreen {
     private static final int TEXT = 0xFFFFFFFF, DIM = 0x8CFFFFFF, GREEN = 0xFF34C759, AMBER = 0xFFFFB340;
     private static final int TOGGLE = 0, CHOICE = 1, PICKER = 2, ACTION = 3, INFO = 4, CHECK = 5;
 
-    private static final int HOME = 0, PRAYER = 1, USAGE = 2, ALERTS = 3, STATUS = 4, REMOTE = 5, HIDDEN = 6; // About: 7
-    private static final String[] CATS = {"Home screen", "Prayer times", "Most used", "Notifications",
-            "Info overlay", "Phone remote", "Running apps", "About"};
+    private static final int HOME = 0, PRAYER = 1, WEATHER = 2, USAGE = 3, SAVER = 4, ALERTS = 5, STATUS = 6,
+            REMOTE = 7, HIDDEN = 8; // About: 9
+    private static final String[] CATS = {"Home screen", "Prayer times", "Weather", "Most used", "Screen saver",
+            "Notifications", "Info overlay", "Phone remote", "Running apps", "About"};
     private static final String[] CAT_SUBS = {"Cards, clock and wallpaper", "Zone and card",
-            "Your top apps this week", "What the bell tells you", "Speed, uptime and clock over apps",
-            "Control the TV from your phone", "Apps hidden from the list", "Version and TV settings"};
-    private static final int[] CAT_ICONS = {R.drawable.ic_tv, R.drawable.ic_crescent, R.drawable.ic_chart, R.drawable.ic_bell,
-            R.drawable.ic_status_bar, R.drawable.ic_phone, R.drawable.ic_ram, R.drawable.ic_info};
+            "Forecast and air quality", "Your top apps this week", "What the TV shows when idle", "What the bell tells you",
+            "Speed, uptime and clock over apps", "Control the TV from your phone", "Apps hidden from the list",
+            "Version and TV settings"};
+    private static final int[] CAT_ICONS = {R.drawable.ic_tv, R.drawable.ic_crescent, R.drawable.ic_storm,
+            R.drawable.ic_chart, R.drawable.ic_screensaver, R.drawable.ic_bell, R.drawable.ic_status_bar,
+            R.drawable.ic_phone, R.drawable.ic_ram, R.drawable.ic_info};
     private static final String LIVE_TV = "com.mediatek.wwtv.tvcenter";
 
     interface Host {
@@ -57,6 +61,12 @@ final class SettingsScreen {
         void onFocusMoved();
 
         void openTvSettings();
+
+        /** The TV's own screen-saver settings, where "Prayer time" or "Live log" can be chosen. */
+        void openScreenSaverSettings();
+
+        /** Starts the screen saver now, as a preview. */
+        void startScreenSaver();
 
         /** Shows a wallpaper without saving it (focus in the Wallpaper list); null: the saved one. */
         void previewWallpaper(String id);
@@ -70,10 +80,12 @@ final class SettingsScreen {
         String[] names;
         Supplier<String> value;
         Runnable action;
+        java.util.function.BooleanSupplier on; // a switch for something other than a LauncherSettings flag
         boolean checked;
         String id;         // wallpaper list: what this row shows
         boolean thumbSlot; // wallpaper list: a small preview on the left
         Bitmap thumb;
+        String heading;    // a separator above the row, with this small title (never focused)
 
         Row(int type, String label) {
             this.type = type;
@@ -99,6 +111,7 @@ final class SettingsScreen {
     private String pickerTitle;
     private int pickerFrom;
     private boolean confirmForget;
+    private String confirmPhone; // Phone remote: the phone whose Forget is waiting for a second OK
 
     SettingsScreen(Context ctx, FrameLayout root, Executor worker, Host host) {
         this.ctx = ctx;
@@ -214,6 +227,7 @@ final class SettingsScreen {
         row = 0;
         picker = null;
         confirmForget = false;
+        confirmPhone = null;
         render();
     }
 
@@ -221,6 +235,13 @@ final class SettingsScreen {
     View focused() {
         if (col == 0) return catViews.get(cat);
         return row < rowViews.size() ? rowViews.get(row) : null;
+    }
+
+    /** Rows again from current state (e.g. the screen saver switch after a preview). */
+    void refreshRows() {
+        if (picker != null) return;
+        rows = rowsFor(cat);
+        render();
     }
 
     void up() {
@@ -233,6 +254,7 @@ final class SettingsScreen {
 
     private void move(int d) {
         confirmForget = false;
+        confirmPhone = null;
         if (col == 0) {
             int c = cat + d;
             if (c < 0 || c >= CATS.length) return;
@@ -278,6 +300,7 @@ final class SettingsScreen {
     /** Back: picker → rows → categories → (true) close Settings. */
     boolean back() {
         confirmForget = false;
+        confirmPhone = null;
         if (picker != null) {
             closePicker();
             return false;
@@ -295,7 +318,8 @@ final class SettingsScreen {
     private void act(Row r) {
         switch (r.type) {
             case TOGGLE:
-                LauncherSettings.setFlag(ctx, r.key, !LauncherSettings.flag(ctx, r.key));
+                if (r.on != null) r.action.run();
+                else LauncherSettings.setFlag(ctx, r.key, !LauncherSettings.flag(ctx, r.key));
                 break;
             case CHOICE: {
                 int now = LauncherSettings.choice(ctx, r.key), i = 0;
@@ -342,6 +366,8 @@ final class SettingsScreen {
         switch (c) {
             case HOME: homeRows(out); break;
             case PRAYER: prayerRows(out); break;
+            case WEATHER: weatherRows(out); break;
+            case SAVER: saverRows(out); break;
             case USAGE: usageRows(out); break;
             case ALERTS: alertRows(out); break;
             case STATUS: statusRows(out); break;
@@ -350,6 +376,68 @@ final class SettingsScreen {
             default: aboutRows(out); break;
         }
         return out;
+    }
+
+    /**
+     * The TV's screen saver (ScreenSaver): on/off, which one (OK cycles Prayer time → Live log →
+     * Globe → the TV's others), a preview, and with Globe chosen, a switch for each of its layers. Some TVs can't open their screen-saver page from another
+     * app, so with WRITE_SECURE_SETTINGS TV Home sets it itself; without, it opens the TV's Settings.
+     */
+    private void saverRows(List<Row> out) {
+        android.content.ComponentName current = ScreenSaver.current(ctx);
+        String name = ScreenSaver.label(ctx, current);
+        if (ScreenSaver.canSet(ctx)) {
+            Row on = new Row(TOGGLE, "Screen saver");
+            on.sub = "Starts when the TV has been idle for a while";
+            on.on = () -> ScreenSaver.enabled(ctx);
+            on.action = () -> ScreenSaver.setEnabled(ctx, !ScreenSaver.enabled(ctx));
+            out.add(on);
+            Row show = new Row(PICKER, "Show");
+            // What the chosen one shows, so the row explains itself as OK cycles.
+            String what = ScreenSaver.prayer(ctx).equals(current) ? "Big clock, dates and prayer times"
+                    : ScreenSaver.log(ctx).equals(current) ? "The TV's live log, scrolling on black"
+                    : ScreenSaver.globe(ctx).equals(current) ? "The Earth now, with live dots. The arrows turn it"
+                    : "One of the TV's own screen savers";
+            show.sub = what;
+            show.value = () -> name;
+            show.action = () -> ScreenSaver.next(ctx);
+            out.add(show);
+        } else {
+            Row pick = new Row(ACTION, "Choose a screen saver");
+            pick.sub = "In the TV's Settings: \"Prayer time\" (clock and prayer times), \"Live log\" or \"Globe\"";
+            pick.value = () -> name;
+            pick.action = host::openScreenSaverSettings;
+            out.add(pick);
+        }
+        Row now = new Row(ACTION, "Start now");
+        now.sub = "Preview it: any key ends it";
+        now.action = host::startScreenSaver;
+        out.add(now);
+        if (ScreenSaver.globe(ctx).equals(current)) {
+            Row turning = choice(LauncherSettings.GLOBE_SPIN, "Turning",
+                    "A spin every 2 minutes, or the Earth's real speed",
+                    new int[]{LauncherSettings.SPIN_TWO_MINUTES, LauncherSettings.SPIN_REAL_TIME},
+                    new String[]{"Every 2 minutes", "Real time"});
+            turning.heading = "Globe";
+            out.add(turning);
+            out.add(toggle(LauncherSettings.GLOBE_PRAYER_LINES, "Prayer lines", "Where it's Maghrib and Fajr right now"));
+            out.add(toggle(LauncherSettings.GLOBE_MAKKAH, "Makkah and qibla", "The Kaaba, and the way to it from your zone"));
+            out.add(toggle(LauncherSettings.GLOBE_ZONE, "Your zone", "Where your prayer zone is"));
+            out.add(toggle(LauncherSettings.GLOBE_CITY_LIGHTS, "City lights", "The night side's lights"));
+            out.add(toggle(LauncherSettings.GLOBE_GLINT, "Sun glint", "The sun's reflection on the sea"));
+            out.add(toggle(LauncherSettings.GLOBE_RIM, "Sunlit rim", "The atmosphere glows brighter on the sun's side"));
+            out.add(toggle(LauncherSettings.GLOBE_SNOW, "Snow and sea ice", "From NASA, daily"));
+            out.add(toggle(LauncherSettings.GLOBE_SKY, "Sky", "The Sun, the Moon in its phase, real stars and deep-sky objects"));
+            out.add(toggle(LauncherSettings.GLOBE_CLOUDS, "Clouds", "From weather satellites, every 3 hours"));
+            out.add(toggle(LauncherSettings.GLOBE_WIND, "Wind", "Moving lines: the wind near the ground, NOAA's forecast"));
+            out.add(toggle(LauncherSettings.GLOBE_AURORA, "Aurora", "NOAA's forecast, every 15 minutes"));
+            out.add(toggle(LauncherSettings.GLOBE_EDITS, "Map edits", "OpenStreetMap edits as people save them"));
+            out.add(toggle(LauncherSettings.GLOBE_QUAKES, "Earthquakes", "Magnitude 2.5 and up, the past day"));
+            out.add(toggle(LauncherSettings.GLOBE_ISS, "ISS", "The International Space Station"));
+            out.add(toggle(LauncherSettings.GLOBE_TIANGONG, "Tiangong", "China's space station"));
+            out.add(toggle(LauncherSettings.GLOBE_HUBBLE, "Hubble", "The Hubble Space Telescope"));
+            out.add(toggle(LauncherSettings.GLOBE_LEGEND, "Legend", "What each colour and icon means, with the latest edit and earthquake"));
+        }
     }
 
     private void prayerRows(List<Row> out) {
@@ -371,13 +459,36 @@ final class SettingsScreen {
         out.add(test);
     }
 
+    /** The Weather card: on/off, the MET place (Auto: the prayer zone's town) and the APIMS station. */
+    private void weatherRows(List<Row> out) {
+        out.add(toggle(LauncherSettings.SHOW_WEATHER, "Weather card",
+                "Today's forecast and air quality on the home screen"));
+        List<Weather.Place> places = WeatherPanel.places(ctx);
+        Weather.Place place = WeatherPanel.place(ctx, places);
+        boolean auto = LauncherSettings.weatherPlace(ctx).isEmpty();
+        Row loc = new Row(PICKER, "Location");
+        loc.sub = place != null ? "MET Malaysia's forecast for this " + place.type().toLowerCase(Locale.ROOT)
+                : "MET Malaysia's forecast. Auto: your prayer zone's town";
+        loc.value = () -> place == null ? "Auto" : auto ? "Auto (" + place.name + ")" : place.name;
+        loc.action = this::openPlacePicker;
+        out.add(loc);
+        List<Weather.Station> stations = WeatherPanel.stations(ctx);
+        Weather.Station station = WeatherPanel.station(ctx, stations);
+        boolean nearest = LauncherSettings.weatherStation(ctx).isEmpty();
+        Row st = new Row(PICKER, "Air quality station");
+        st.sub = "APIMS reading there; Copernicus for the same spot";
+        st.value = () -> station == null ? "Nearest" : nearest ? "Nearest (" + station.place + ")" : station.place;
+        st.action = this::openStationPicker;
+        out.add(st);
+    }
+
     private void usageRows(List<Row> out) {
         out.add(toggle(LauncherSettings.SHOW_USAGE, "Most used card", "Your top 5 apps this week on the home screen"));
         out.add(choice(LauncherSettings.WEEK_START, "Week starts on", "Counts from this day up to today",
                 new int[] {1, 7}, new String[] {"Monday", "Sunday"}));
         Row ex = new Row(PICKER, "Leave out");
-        ex.sub = "Apps that don't count, like Live TV (it's only the HDMI and antenna screen)";
-        int n = LauncherSettings.usageExcluded(ctx).size();
+        ex.sub = "Not on the card, like Live TV (it's only the HDMI and antenna screen)";
+        int n = LauncherSettings.usageExcludedPresent(ctx).size();
         ex.value = () -> n == 1 ? "1 app" : n + " apps";
         ex.action = this::openUsagePicker;
         out.add(ex);
@@ -387,6 +498,8 @@ final class SettingsScreen {
         out.add(choice(LauncherSettings.CLOCK, "Clock", "Auto follows the TV's own setting",
                 new int[] {LauncherSettings.CLOCK_AUTO, LauncherSettings.CLOCK_12, LauncherSettings.CLOCK_24},
                 new String[] {"Auto", "12-hour", "24-hour"}));
+        out.add(choice(LauncherSettings.APPS_PER_ROW, "Apps per row", "The dock and the app list. More apps, smaller tiles",
+                new int[] {5, 6, 7}, new String[] {"5", "6", "7"}));
         out.add(toggle(LauncherSettings.SHOW_SYSTEM, "System card", "CPU, RAM, storage, network and USB debugging"));
         out.add(toggle(LauncherSettings.SHOW_NOW, "Now Playing card", "Cover, title and controls while something plays"));
         out.add(choice(LauncherSettings.WALL_DIM, "Wallpaper dim", "How dark the wallpaper is behind the cards",
@@ -410,14 +523,15 @@ final class SettingsScreen {
     }
 
     private void alertRows(List<Row> out) {
-        out.add(toggle(LauncherSettings.ALERT_PLAY, "Play Store updates", "Checked every 6 hours"));
+        out.add(toggle(LauncherSettings.ALERT_UPDATE, "TV Home updates", "Checked every 6 hours"));
+        out.add(toggle(LauncherSettings.ALERT_PLAY, "Play Store updates", "Apps with an update waiting, checked every hour"));
         out.add(toggle(LauncherSettings.ALERT_HDMI, "New HDMI devices", "A device that appears over HDMI-CEC"));
         out.add(toggle(LauncherSettings.ALERT_BT, "Bluetooth devices", "Connecting or disconnecting (not the TV remote)"));
+        out.add(toggle(LauncherSettings.NET_BANNER, "Connection status",
+                "Wi-Fi connected, disconnected or no internet, over any app"));
         out.add(toggle(LauncherSettings.ALERT_MEMORY, "Low memory", "When RAM use passes the level below"));
         out.add(choice(LauncherSettings.MEMORY_LEVEL, "Low-memory level", "Alerts again after dropping 5 points under it",
                 new int[] {80, 85, 90}, new String[] {"80 %", "85 %", "90 %"}));
-        out.add(toggle(LauncherSettings.NET_BANNER, "Connection banner",
-                "Wi-Fi connected, disconnected or no internet, over any app"));
     }
 
     private void statusRows(List<Row> out) {
@@ -431,7 +545,7 @@ final class SettingsScreen {
                 StatusOverlay.SLOT_VALUES, StatusOverlay.SLOT_NAMES));
         out.add(choice(LauncherSettings.STATUS_POS, "Position", "Top or bottom edge of the screen",
                 StatusOverlay.POS_VALUES, StatusOverlay.POS_NAMES));
-        out.add(choice(LauncherSettings.STATUS_SIZE, "Text size", "Small 12, Medium 14, Large 18",
+        out.add(choice(LauncherSettings.STATUS_SIZE, "Text size", "Tiny 10, Small 12, Medium 14, Large 18",
                 StatusOverlay.SIZE_VALUES, StatusOverlay.SIZE_NAMES));
         out.add(toggle(LauncherSettings.STATUS_BG, "Background", "A dark see-through box behind the text"));
     }
@@ -453,9 +567,38 @@ final class SettingsScreen {
                 return;
             }
             confirmForget = false;
+        confirmPhone = null;
             RemoteServer.forgetAll(ctx);
         };
         out.add(f);
+        // Each paired phone, newest first: its name (typed when pairing, or Rename on the phone)
+        // and when it was last used. OK twice forgets that one; it has to pair again.
+        try {
+            org.json.JSONArray phones = new RemoteDevices(ctx).json(null);
+            for (int i = 0; i < phones.length(); i++) {
+                org.json.JSONObject d = phones.getJSONObject(i);
+                String id = d.optString("id"), name = d.optString("name", "Phone");
+                boolean asking = id.equals(confirmPhone);
+                Row r = new Row(ACTION, asking ? "Press OK again to forget " + name : name);
+                r.id = id;
+                r.value = () -> asking ? "Confirm" : "Forget";
+                r.action = () -> {
+                    if (!id.equals(confirmPhone)) {
+                        confirmPhone = id;
+                        return;
+                    }
+                    confirmPhone = null;
+                    new RemoteDevices(ctx).remove(id);
+                };
+                long seen = d.optLong("lastSeen"), now = System.currentTimeMillis();
+                r.sub = seen <= 0 ? "Paired"
+                        : now - seen < 60_000 ? "Last used just now"
+                        : "Last used " + android.text.format.DateUtils.getRelativeTimeSpanString(
+                                seen, now, android.text.format.DateUtils.MINUTE_IN_MILLIS);
+                out.add(r);
+            }
+        } catch (org.json.JSONException ignored) {
+        }
     }
 
     private void hiddenRows(List<Row> out) {
@@ -480,7 +623,8 @@ final class SettingsScreen {
         String version = "?", installed = "?";
         try {
             PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
-            version = pi.versionName + " (" + pi.getLongVersionCode() + ")";
+            long code = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? pi.getLongVersionCode() : pi.versionCode;
+            version = pi.versionName + " (" + code + ")";
             installed = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(new Date(pi.lastUpdateTime));
         } catch (PackageManager.NameNotFoundException ignored) {
         }
@@ -512,6 +656,123 @@ final class SettingsScreen {
             items.add(r);
         }
         openPicker("Zone", items, focus);
+    }
+
+    /** Every MET forecast location, with Auto (the prayer zone's town) first. */
+    private void openPlacePicker() {
+        if (WeatherPanel.places(ctx).isEmpty()) loadingPicker("Location", this::openPlacePicker);
+        else preparing("Location", this::showPlaces);
+    }
+
+    /** The 441 rows take a moment to build: shown after "Loading…" (preparing). */
+    private void showPlaces() {
+        List<Weather.Place> places = WeatherPanel.places(ctx);
+        String chosen = LauncherSettings.weatherPlace(ctx);
+        Weather.Place auto = WeatherPanel.autoPlace(ctx, places);
+        List<Row> items = new ArrayList<>();
+        Row a = new Row(CHECK, "Auto");
+        a.sub = "Your prayer zone's town" + (auto != null ? ": " + auto.name : "");
+        a.checked = chosen.isEmpty();
+        a.action = () -> {
+            LauncherSettings.setWeatherPlace(ctx, "");
+            closePicker();
+        };
+        items.add(a);
+        int focus = 0;
+        for (Weather.Place p : places) {
+            Row r = new Row(CHECK, p.name);
+            r.sub = p.type() + " · " + p.id;
+            r.checked = p.id.equals(chosen);
+            if (r.checked) focus = items.size();
+            r.action = () -> {
+                LauncherSettings.setWeatherPlace(ctx, p.id);
+                closePicker();
+            };
+            items.add(r);
+        }
+        openPicker("Location", items, focus);
+    }
+
+    /** Every APIMS station by state, with Nearest (to the prayer zone's town) first. */
+    private void openStationPicker() {
+        if (WeatherPanel.stations(ctx).isEmpty()) loadingPicker("Air quality station", this::openStationPicker);
+        else preparing("Air quality station", this::showStations);
+    }
+
+    private void showStations() {
+        List<Weather.Station> stations = WeatherPanel.stations(ctx);
+        String chosen = LauncherSettings.weatherStation(ctx);
+        Weather.Station near = WeatherPanel.nearestStation(ctx, stations);
+        List<Row> items = new ArrayList<>();
+        Row n = new Row(CHECK, "Nearest");
+        n.sub = "Closest to your prayer zone's town" + (near != null ? ": " + near.place : "");
+        n.checked = chosen.isEmpty();
+        n.action = () -> {
+            LauncherSettings.setWeatherStation(ctx, "");
+            closePicker();
+        };
+        items.add(n);
+        int focus = 0;
+        for (Weather.Station s : stations) {
+            Row r = new Row(CHECK, s.place);
+            r.sub = s.state + " · " + s.id + (s.api >= 0 ? " · API " + s.api : "");
+            r.checked = s.id.equals(chosen);
+            if (r.checked) focus = items.size();
+            r.action = () -> {
+                LauncherSettings.setWeatherStation(ctx, s.id);
+                closePicker();
+            };
+            items.add(r);
+        }
+        openPicker("Air quality station", items, focus);
+    }
+
+    /**
+     * A long list: "Loading…" at once, so OK answers straight away, then the list itself once the
+     * highlight has settled on it (building hundreds of rows holds the screen's thread for a
+     * moment, and a highlight still on its way would freeze half-way meanwhile).
+     */
+    private void preparing(String title, Runnable show) {
+        Row r = new Row(INFO, "Loading…");
+        r.sub = "Getting the list ready";
+        List<Row> items = new ArrayList<>();
+        items.add(r);
+        openPicker(title, items, 0);
+        main.postDelayed(() -> {
+            if (picker == null || !title.equals(pickerTitle) || picker.size() != 1) return; // left meanwhile
+            int from = pickerFrom;
+            picker = null;
+            row = from;
+            show.run(); // opens the real list, still returning to the same row
+        }, 350); // after the highlight has glided onto "Loading…": the build holds the screen's thread
+    }
+
+    /**
+     * A list that isn't downloaded yet: "Loading…" while it is, then the list (or a line saying it
+     * couldn't be fetched). Leaving meanwhile is fine: the result is kept for next time.
+     */
+    private void loadingPicker(String title, Runnable reopen) {
+        Row r = new Row(INFO, "Loading…");
+        r.sub = "Fetching the list from the internet";
+        List<Row> items = new ArrayList<>();
+        items.add(r);
+        openPicker(title, items, 0);
+        WeatherPanel.loadLists(ctx, () -> {
+            if (picker == null || !title.equals(pickerTitle)) return; // left meanwhile
+            int from = pickerFrom;
+            boolean got = title.equals("Location") ? !WeatherPanel.places(ctx).isEmpty()
+                    : !WeatherPanel.stations(ctx).isEmpty();
+            if (got) {
+                picker = null;
+                row = from;
+                reopen.run(); // opens the real list, still returning to the same row
+            } else {
+                Row fail = new Row(INFO, "Couldn't load the list");
+                fail.sub = "Check the internet connection and try again";
+                picker.set(0, fail);
+                render();
+            }
+        });
     }
 
     private static final String WALLPAPER_TITLE = "Wallpaper";
@@ -728,7 +989,7 @@ final class SettingsScreen {
         crumb.setText("/  " + CATS[cat] + (picker != null ? "  /  " + pickerTitle : ""));
         paneTitle.setText(picker != null ? pickerTitle : CATS[cat]);
         paneSub.setText(inWallpaperList() ? "Move to preview  ·  OK to set"
-                : picker != null ? (picker.size() + " items") : CAT_SUBS[cat]);
+                : picker != null ? count(picker) : CAT_SUBS[cat]);
         renderRows();
     }
 
@@ -737,7 +998,10 @@ final class SettingsScreen {
         rowViews.clear();
         List<Row> list = current();
         for (int i = 0; i < list.size(); i++) {
-            View v = rowView(list.get(i));
+            Row r = list.get(i);
+            if (r.heading != null) rowList.addView(heading(r.heading), new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            View v = rowView(r);
             rowList.addView(v, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT));
             rowViews.add(v);
@@ -747,9 +1011,32 @@ final class SettingsScreen {
         host.onFocusMoved();
     }
 
+    /** "441 items", "1 item"; nothing while a list only says it's loading (or couldn't). */
+    private static String count(List<Row> list) {
+        if (list.size() == 1 && list.get(0).type == INFO) return "";
+        return list.size() == 1 ? "1 item" : list.size() + " items";
+    }
+
     private void scrollToFocus() {
         View f = row < rowViews.size() ? rowViews.get(row) : null;
         if (f != null) scroll.post(() -> scroll.smoothScrollTo(0, Math.max(0, f.getTop() - px(70))));
+    }
+
+    /** A thin line with a small title, between groups of rows (Row.heading). */
+    private View heading(String title) {
+        LinearLayout h = new LinearLayout(ctx);
+        h.setOrientation(LinearLayout.VERTICAL);
+        h.setPadding(px(16), px(14), px(14), px(4));
+        View line = new View(ctx);
+        line.setBackgroundColor(0x26FFFFFF);
+        h.addView(line, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, px(1))));
+        TextView t = text(12, 500, DIM);
+        t.setText(title.toUpperCase(Locale.ROOT));
+        t.setLetterSpacing(0.08f);
+        LinearLayout.LayoutParams tl = wrap();
+        tl.topMargin = px(12);
+        h.addView(t, tl);
+        return h;
     }
 
     private View rowView(Row r) {
@@ -787,7 +1074,8 @@ final class SettingsScreen {
         String value = r.value != null ? r.value.get() : null;
         switch (r.type) {
             case TOGGLE:
-                v.addView(switchView(LauncherSettings.flag(ctx, r.key)), margin(new LinearLayout.LayoutParams(px(44), px(26))));
+                boolean isOn = r.on != null ? r.on.getAsBoolean() : LauncherSettings.flag(ctx, r.key);
+                v.addView(switchView(isOn), margin(new LinearLayout.LayoutParams(px(44), px(26))));
                 break;
             case CHOICE:
             case PICKER: {
@@ -801,7 +1089,8 @@ final class SettingsScreen {
             }
             case ACTION:
                 if (!TextUtils.isEmpty(value)) {
-                    TextView t = text(14, 500, confirmForget ? AMBER : DIM);
+                    boolean asking = (r.id == null && confirmForget) || (r.id != null && r.id.equals(confirmPhone));
+                    TextView t = text(14, 500, asking ? AMBER : DIM);
                     t.setText(value);
                     v.addView(t, margin(wrap()));
                 }

@@ -24,6 +24,7 @@ import android.media.tv.TvContract;
 import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
 import android.net.ConnectivityManager;
+import android.net.Uri;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.wifi.WifiInfo;
@@ -32,6 +33,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.format.DateFormat;
 import android.view.Gravity;
@@ -77,11 +79,19 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int TOP = 0, DOCK = 1, GRID = 2, MENU = 3, NOW = 4, UP = 5, SETTINGS = 6;
     private static final float NOW_SCALE = 1.12f;
-    private static final int RIGHT_CARD_W = 412; // System and Now Playing cards, dp
-    private static final int COLS = 5, DOCK_SIZE = DockConfig.MAX;
+    /**
+     * The card columns' width, dp: left (Prayer, Weather) and right (System, Most used, Now
+     * Playing) the same, 30 dp apart, from 64 dp in to under the Settings button (896 dp).
+     */
+    private static final int RIGHT_CARD_W = 401; // System and Now Playing cards, dp
+    // Apps per row (Settings → Home screen): the dock and each app-list row, 5 to 7.
     private static final float TILE_SCALE = 1.1f, PILL_SCALE = 1.06f;
     // dp
-    private static final int TILE_W = 152, TILE_H = 86, COL_W = 172, ROW_PITCH = 132;
+    // Tile sizes for that many columns (applyGridSize): the row always spans ROW_W, the width
+    // five 172dp columns had, so tiles grow or shrink to fill it (5 per row: 152 x 86). The gap
+    // between tiles and their shape scale with them. dp.
+    private static final int ROW_W = 5 * 172, LABEL_GAP = 12, LABEL_ROOM = 46;
+    private int cols, tileW, tileH, colW, rowPitch;
     // The grid runs to the top of the screen (GRID_TOP 0) with its first row 70dp down, so the
     // row above scrolls up under the top edge (shaded by gridTopFade) instead of vanishing at a
     // hard edge 56dp down and leaving a blank band.
@@ -94,6 +104,9 @@ public class MainActivity extends Activity {
     private static final Object PAYLOAD_TILE = new Object();
 
     private final Handler main = new Handler(Looper.getMainLooper());
+    /** Open the Inputs menu (the remote's Input button on a TV without its own picker: InputsActivity). */
+    static final String ACTION_INPUTS = "my.rafhan.app.tvhome.action.INPUTS";
+    private boolean wantInputs;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Map<String, AppEntry> rendered = new HashMap<>();
     private final List<ImageView> dockTiles = new ArrayList<>();
@@ -117,7 +130,9 @@ public class MainActivity extends Activity {
     private FrameLayout upPage;
     private PrayerPanel prayer;
     private UsagePanel usage;
-    private Map<String, Long> usageScores = new HashMap<>();
+    private WeatherPanel weather;
+    /** This week (the Most used card) and all time (the grid order). */
+    private UsageScores.Scores usageScores = UsageScores.Scores.NONE;
     private final GradientDrawable glowDrawable = new GradientDrawable();
     private int glowColor = Color.TRANSPARENT;
     private ValueAnimator glowAnim;
@@ -162,6 +177,10 @@ public class MainActivity extends Activity {
     private long dockStamp; // dock.txt as of the last load: reload if it changed behind our back
 
     private List<AppEntry> dock = new ArrayList<>();
+    // dock.txt as loaded, the part of it the dock shows, and the installed apps: dockPkgs() keeps
+    // the apps a lower "apps per row" hides.
+    private List<String> savedDock = new ArrayList<>(), shownDock = new ArrayList<>();
+    private Set<String> installedPkgs = new HashSet<>();
     private List<AppEntry> apps = new ArrayList<>();
 
     private int section = DOCK, topIdx, dockIdx, gridIdx, menuIdx, nowIdx, upIdx;
@@ -240,6 +259,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         dp = getResources().getDisplayMetrics().density;
+        wantInputs = ACTION_INPUTS.equals(getIntent().getAction());
+        // After an update Android sometimes leaves the accessibility service unconnected.
+        RemoteAccessibilityService.checkSoon(this);
         screenW = getResources().getDisplayMetrics().widthPixels;
         screenH = getResources().getDisplayMetrics().heightPixels;
         prefs = getSharedPreferences("home", MODE_PRIVATE);
@@ -269,13 +291,15 @@ public class MainActivity extends Activity {
                 findViewById(R.id.pillSettings)};
         bellBadge = findViewById(R.id.bellBadge);
         bellBadge.setTypeface(Fonts.outfit(this, 600));
+        LinearLayout weatherCard = findViewById(R.id.weatherPanel);
         homeViews = new View[] {findViewById(R.id.clockBlock), findViewById(R.id.pills), findViewById(R.id.dockBand),
                 findViewById(R.id.sysPanel), findViewById(R.id.prayerPanel), findViewById(R.id.usagePanel),
-                findViewById(R.id.peekFade), findViewById(R.id.nowPlaying)};
+                weatherCard, findViewById(R.id.peekFade), findViewById(R.id.nowPlaying)};
         system = new SystemPanel(this, findViewById(R.id.sysPanel), worker);
         nowPlaying = new NowPlayingPanel(this, findViewById(R.id.nowPlaying), worker, shown -> {
             // Playback ended while its buttons had focus: back to the dock.
             if (!shown && section == NOW && !dock.isEmpty()) moveFocus(DOCK, dockIdx);
+            showUsage(); // Now Playing takes the Most used card's spot while something plays
         });
         prayer = new PrayerPanel(this, findViewById(R.id.prayerPanel), hijri, worker);
         upPage = findViewById(R.id.upPage);
@@ -287,6 +311,7 @@ public class MainActivity extends Activity {
             up.setFocused(upIdx);
         });
         usage = new UsagePanel(this, findViewById(R.id.usagePanel));
+        weather = new WeatherPanel(this, weatherCard);
         alignSystemPanel();
         centreDatesOnClock();
 
@@ -304,9 +329,10 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         glowDrawable.setColors(new int[] {Color.TRANSPARENT, Color.TRANSPARENT});
         glow.setBackground(glowDrawable);
 
+        applyGridSize();
         layoutPage();
 
-        grid.setLayoutManager(new GridLayoutManager(this, COLS));
+        grid.setLayoutManager(new GridLayoutManager(this, cols));
         grid.setItemAnimator(null);
         grid.setHasFixedSize(true);
         grid.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS);
@@ -339,6 +365,34 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             @Override
             public void openTvSettings() {
                 startSafely(new Intent(Settings.ACTION_SETTINGS));
+            }
+
+            @Override
+            public void startScreenSaver() {
+                Context ctx = MainActivity.this;
+                // SystemUI's "start screen saver now" (the dock shortcut) runs the chosen one, but
+                // only while screen savers are on: switch them on for the start, then back off.
+                boolean wasOff = !ScreenSaver.enabled(ctx);
+                if (wasOff && !ScreenSaver.canSet(ctx)) {
+                    Toast.makeText(ctx, "Turn the screen saver on first", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                if (wasOff) ScreenSaver.setEnabled(ctx, true);
+                startSafely(new Intent(Intent.ACTION_MAIN)
+                        .setClassName("com.android.systemui", "com.android.systemui.Somnambulator")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                // Switching them off again ends a running screen saver, so that waits until the
+                // preview is over and the launcher is back in front (onWindowFocusChanged).
+                if (wasOff) previewStartedAt = SystemClock.uptimeMillis();
+            }
+
+            @Override
+            public void openScreenSaverSettings() {
+                try {
+                    startActivity(new Intent(Settings.ACTION_DREAM_SETTINGS));
+                } catch (ActivityNotFoundException | SecurityException e) {
+                    startSafely(new Intent(Settings.ACTION_SETTINGS)); // no screen-saver page
+                }
             }
 
             @Override
@@ -376,9 +430,27 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         return gridTop() - px(GRID_TOP);
     }
 
+    /** Columns and tile sizes for Settings → Home screen → Apps per row. */
+    private void applyGridSize() {
+        cols = DockConfig.size(this);
+        colW = ROW_W / cols;
+        tileW = Math.round(colW * 152f / 172f);
+        tileH = Math.round(tileW * 86f / 152f);
+        rowPitch = tileH + LABEL_ROOM;
+    }
+
+    /** Apps per row changed: new columns, tile sizes and dock length, tiles drawn again. */
+    private void onAppsPerRowChanged() {
+        applyGridSize();
+        layoutPage();
+        ((GridLayoutManager) grid.getLayoutManager()).setSpanCount(cols);
+        rendered.clear(); // tiles are drawn at their size
+        loadApps();
+    }
+
     private void layoutPage() {
         place(page, 0, gridTop() + screenH - px(GRID_TOP));
-        int bandH = px(TILE_H + 2 * BAND_PAD_V);
+        int bandH = px(tileH + 2 * BAND_PAD_V);
         int bandTop = screenH - px(PEEK + BAND_GAP) - bandH;
         place(findViewById(R.id.dockBand), bandTop, 0);
         int heroTop = bandTop - px(HERO_GAP + HERO_H);
@@ -390,7 +462,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         ViewGroup.LayoutParams flp = fade.getLayoutParams();
         flp.height = px(PEEK + BAND_GAP - 4);
         fade.setLayoutParams(flp);
-        int side = (screenW - px(COLS * COL_W)) / 2;
+        int side = (screenW - px(cols * colW)) / 2;
         grid.setPadding(side, px(GRID_PAD_TOP), side, px(GRID_PAD_BOTTOM));
     }
 
@@ -426,13 +498,21 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 card.post(() -> card.setLayoutParams(lp));
             }
         });
-        // Now Playing sits under the system card, same width and edges.
+        // Now Playing and Most used sit under the system card, same width and edges.
         card.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> placeNowPlaying());
     }
 
-    /** Now Playing: under the system card, same width and edges; in its place when it's off. */
+    /**
+     * Now Playing and the Most used card (they share one spot): under the system card, same width
+     * and edges; in its place when it's off.
+     */
     private void placeNowPlaying() {
-        View card = findViewById(R.id.sysPanel), np = findViewById(R.id.nowPlaying);
+        View card = findViewById(R.id.sysPanel);
+        underSystem(card, findViewById(R.id.nowPlaying));
+        underSystem(card, findViewById(R.id.usagePanel));
+    }
+
+    private void underSystem(View card, View np) {
         ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) np.getLayoutParams();
         ViewGroup.MarginLayoutParams sp = (ViewGroup.MarginLayoutParams) card.getLayoutParams();
         boolean below = card.getVisibility() != View.GONE;
@@ -455,8 +535,8 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         tile.setBackgroundResource(R.drawable.tile_bg);
         tile.setClipToOutline(true);
         tile.setScaleType(ImageView.ScaleType.FIT_XY);
-        column.addView(tile, new FrameLayout.LayoutParams(px(TILE_W), px(TILE_H), Gravity.CENTER));
-        dockRow.addView(column, new LinearLayout.LayoutParams(px(COL_W), px(TILE_H)));
+        column.addView(tile, new FrameLayout.LayoutParams(px(tileW), px(tileH), Gravity.CENTER));
+        dockRow.addView(column, new LinearLayout.LayoutParams(px(colW), px(tileH)));
         return tile;
     }
 
@@ -469,10 +549,10 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     private void loadApps() {
         worker.execute(() -> {
             List<AppEntry> all = AppRepository.load(this);
-            long stamp = DockConfig.stamp(this);
             List<String> dockPkgs = DockConfig.load(this);
+            long stamp = DockConfig.stamp(this); // after load(), which may restore the shared copy
             dockStamp = stamp;
-            Map<String, Long> scores = UsageScores.week(this);
+            UsageScores.Scores scores = UsageScores.read(this);
             main.post(() -> applyApps(all, dockPkgs, scores));
         });
     }
@@ -509,7 +589,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         }
     }
 
-    private void applyApps(List<AppEntry> all, List<String> dockPkgs, Map<String, Long> scores) {
+    private void applyApps(List<AppEntry> all, List<String> dockPkgs, UsageScores.Scores scores) {
         String focusedPkg = focusedPackage();
         Map<String, AppEntry> byPkg = new HashMap<>();
         for (AppEntry e : all) byPkg.put(e.pkg, e);
@@ -517,8 +597,12 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         List<AppEntry> newDock = new ArrayList<>();
         for (String pkg : dockPkgs) {
             AppEntry e = byPkg.get(pkg);
-            if (e != null && !newDock.contains(e) && newDock.size() < DOCK_SIZE) newDock.add(e);
+            if (e != null && !newDock.contains(e) && newDock.size() < cols) newDock.add(e);
         }
+        savedDock = new ArrayList<>(dockPkgs);
+        shownDock = new ArrayList<>();
+        for (AppEntry e : newDock) shownDock.add(e.pkg);
+        installedPkgs = new HashSet<>(byPkg.keySet());
         List<AppEntry> newApps = new ArrayList<>(all);
         newApps.removeAll(newDock);
         usageScores = scores;
@@ -559,7 +643,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         gridIdx = clamp(gridIdx, apps.size());
         if (section == GRID && apps.isEmpty()) section = DOCK;
         if (section == DOCK && dock.isEmpty()) section = TOP;
-        usage.render(allForUsage(), usageScores);
+        usage.render(allForUsage(), usageScores.week);
         if (!appsLoaded) {
             appsLoaded = true;
             restoreFocus(); // needs the app list; first load only
@@ -574,7 +658,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
 
         // Dock first so the home row fills in before the grid below it.
         toRender.sort((a, b) -> Boolean.compare(!dock.contains(a), !dock.contains(b)));
-        int w = px(TILE_W), h = px(TILE_H);
+        int w = px(tileW), h = px(tileH);
         for (AppEntry e : toRender) {
             worker.execute(() -> {
                 Bitmap drawn = TileRenderer.render(this, e, w, h);
@@ -594,21 +678,21 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         }
     }
 
-    /** Most used first (last 7 days); apps with no recorded use stay A-Z. List.sort is stable. */
+    /** Most used first (all time, every app); apps with no use stay A-Z. List.sort is stable. */
     private void sortByUsage(List<AppEntry> list) {
-        UsageScores.sort(list, usageScores);
+        UsageScores.sort(list, usageScores.allTime);
     }
 
     /** On every return home: re-rank the grid and refresh the card, keeping focus on the same app. */
     private void refreshUsage() {
         if (!appsLoaded) return; // the first loadApps() ranks them
         worker.execute(() -> {
-            Map<String, Long> scores = UsageScores.week(this);
+            UsageScores.Scores scores = UsageScores.read(this);
             main.post(() -> applyUsage(scores));
         });
     }
 
-    private void applyUsage(Map<String, Long> scores) {
+    private void applyUsage(UsageScores.Scores scores) {
         usageScores = scores;
         List<AppEntry> sorted = new ArrayList<>(apps);
         sortByUsage(sorted);
@@ -617,11 +701,11 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             apps = sorted;
             if (focusedPkg != null) gridIdx = Math.max(0, indexOf(apps, focusedPkg));
             adapter.notifyDataSetChanged();
-            if (section == GRID) grid.post(() -> scrollGridToRow(gridIdx / COLS, false));
+            if (section == GRID) grid.post(() -> scrollGridToRow(gridIdx / cols, false));
         }
         List<AppEntry> all = new ArrayList<>(dock);
         all.addAll(apps);
-        usage.render(all, usageScores);
+        usage.render(all, usageScores.week);
     }
 
     private void onTileReady(AppEntry e) {
@@ -666,7 +750,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             section = GRID;
             gridIdx = g;
             page.setTranslationY(-gridShift());
-            grid.post(() -> scrollGridToRow(gridIdx / COLS, false));
+            grid.post(() -> scrollGridToRow(gridIdx / cols, false));
         } else if (!dock.isEmpty()) {
             section = DOCK;
             dockIdx = Math.max(0, d);
@@ -755,7 +839,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             setSystemVisible(!toGrid);
             nowPlaying.setVisible(!toGrid);
         }
-        if (newSection == GRID) scrollGridToRow(newIndex / COLS, true);
+        if (newSection == GRID) scrollGridToRow(newIndex / cols, true);
         updateHero(true);
         page.invalidate();
         main.removeCallbacks(saveFocus);
@@ -859,15 +943,15 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         View first = grid.getChildAt(0);
         int pos = grid.getChildAdapterPosition(first);
         if (pos == RecyclerView.NO_POSITION) return 0;
-        return (pos / COLS) * first.getHeight() + grid.getPaddingTop() - first.getTop();
+        return (pos / cols) * first.getHeight() + grid.getPaddingTop() - first.getTop();
     }
 
     private void scrollGridToRow(int row, boolean smooth) {
-        int rows = (apps.size() + COLS - 1) / COLS;
-        int content = rows * px(ROW_PITCH) + px(GRID_PAD_TOP + GRID_PAD_BOTTOM);
+        int rows = (apps.size() + cols - 1) / cols;
+        int content = rows * px(rowPitch) + px(GRID_PAD_TOP + GRID_PAD_BOTTOM);
         int max = Math.max(0, content - grid.getHeight());
         // Keep one row of context above the focused row.
-        int target = Math.max(0, Math.min(max, (row - 1) * px(ROW_PITCH)));
+        int target = Math.max(0, Math.min(max, (row - 1) * px(rowPitch)));
         gridScrollTarget = target;
         int dy = target - gridScroll();
         if (dy == 0) return;
@@ -1047,7 +1131,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 if (upIdx > 0) moveFocus(UP, upIdx - 1);
                 break;
             case GRID:
-                if (gridIdx >= COLS) moveFocus(GRID, gridIdx - COLS);
+                if (gridIdx >= cols) moveFocus(GRID, gridIdx - cols);
                 else if (!dock.isEmpty()) moveFocus(DOCK, Math.min(gridIdx, dock.size() - 1));
                 else moveFocus(TOP, topIdx);
                 break;
@@ -1081,12 +1165,12 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 else moveFocus(TOP, topIdx); // past the last app: back home
                 break;
             case DOCK:
-                if (n > 0) moveFocus(GRID, Math.min(dockIdx, Math.min(COLS, n) - 1));
+                if (n > 0) moveFocus(GRID, Math.min(dockIdx, Math.min(cols, n) - 1));
                 break;
             case GRID:
-                int next = gridIdx + COLS;
+                int next = gridIdx + cols;
                 if (next < n) moveFocus(GRID, next);
-                else if (gridIdx / COLS < (n - 1) / COLS) moveFocus(GRID, n - 1);
+                else if (gridIdx / cols < (n - 1) / cols) moveFocus(GRID, n - 1);
                 break;
             case MENU:
                 if (menuIdx < menu.getChildCount() - 1) moveFocus(MENU, menuIdx + 1);
@@ -1121,8 +1205,8 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 break;
             }
             case GRID: {
-                int col = gridIdx % COLS, i = gridIdx + dir;
-                if (dir < 0 ? col > 0 : col < COLS - 1 && i < apps.size()) moveFocus(GRID, i);
+                int col = gridIdx % cols, i = gridIdx + dir;
+                if (dir < 0 ? col > 0 : col < cols - 1 && i < apps.size()) moveFocus(GRID, i);
                 break;
             }
             default:
@@ -1242,7 +1326,8 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         List<MenuItem> items = new ArrayList<>();
         for (int i = 0; i < Math.min(5, list.size()); i++) {
             Alerts.Alert a = list.get(i);
-            int icon = a.type == Alerts.PLAY ? R.drawable.ic_update : a.type == Alerts.HDMI ? R.drawable.ic_input
+            int icon = a.type == Alerts.PLAY || a.type == Alerts.UPDATE ? R.drawable.ic_update
+                    : a.type == Alerts.HDMI ? R.drawable.ic_input
                     : a.type == Alerts.BLUETOOTH ? R.drawable.ic_bluetooth : R.drawable.ic_ram;
             int color = a.type == Alerts.MEMORY ? 0xFFFFB340 : a.type == Alerts.PLAY ? 0xFF63A4FF : 0xFF63D489;
             String label = a.title + (a.text == null || a.text.isEmpty() ? "" : " — " + a.text) + "  ·  " + ago(a.time);
@@ -1275,7 +1360,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         showMenu(items, Math.min(loc[0], screenW - px(240 + 24)), loc[1] + Math.round(pill.getHeight() * PILL_SCALE) + px(10));
     }
 
-    /** Hold OK / Menu on a dock or grid tile: dock editing and Open. */
+    /** Hold OK / Menu on a dock or grid tile: dock editing, Open and App info. */
     private void openAppMenu() {
         if (section == UP) {
             openUpMenu();
@@ -1293,17 +1378,21 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 d.remove(e.pkg);
                 DockConfig.save(this, d);
             }));
-        } else if (dock.size() < DOCK_SIZE) {
+        } else if (dock.size() < cols) {
             items.add(new MenuItem("Add to dock", () -> {
                 pendingDockFocus = e.pkg;
                 List<String> d = dockPkgs();
-                d.add(e.pkg);
+                d.add(dock.size(), e.pkg); // last of the shown ones, before any hidden ones
                 DockConfig.save(this, d);
             }));
         } else {
             items.add(new MenuItem("Replace a dock app…", () -> startReplace(e)));
         }
         items.add(new MenuItem("Open " + e.label, () -> launch(e)));
+        // The system's page for the app: storage, cache, permissions, force stop, disable.
+        items.add(new MenuItem("App info", () -> startSafely(
+                new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", e.pkg, null))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))));
 
         View tile = inDock ? dockTiles.get(dockIdx) : focusedGridTile();
         int x = screenW / 2 - px(120), y = screenH / 2;
@@ -1412,6 +1501,11 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         switch (key) {
             case LauncherSettings.ZONE:
                 prayer.setZone(LauncherSettings.zone(this));
+                weather.settingsChanged(); // Auto place and Nearest station follow the zone
+                break;
+            case LauncherSettings.WEATHER_PLACE:
+            case LauncherSettings.WEATHER_STATION:
+                weather.settingsChanged();
                 break;
             case LauncherSettings.CLOCK:
                 updateClock(); // also re-renders the prayer times
@@ -1421,6 +1515,10 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             case LauncherSettings.SHOW_SYSTEM:
             case LauncherSettings.SHOW_NOW:
                 applyCardSettings();
+                break;
+            case LauncherSettings.SHOW_WEATHER:
+                applyCardSettings();
+                weather.settingsChanged(); // back on: show and fetch now, not at the next minute
                 break;
             case LauncherSettings.WALL_DIM:
                 applyWallpaperDim();
@@ -1432,28 +1530,39 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             case LauncherSettings.WEEK_START:
                 refreshUsage();
                 break;
+            case LauncherSettings.APPS_PER_ROW:
+                onAppsPerRowChanged();
+                break;
             default:
                 break;
         }
     };
 
     /**
-     * Shows or hides the home cards. Each column stacks what's left from the top: Most used moves
-     * up when the prayer card is off, Now Playing moves up when the System card is off.
+     * Shows or hides the home cards. Each column stacks what's left from the top: Weather moves
+     * up when the prayer card is off; Now Playing and Most used (one spot, Now Playing while
+     * something plays) move up when the System card is off.
      */
     private void applyCardSettings() {
-        View prayerCard = findViewById(R.id.prayerPanel), usageCard = findViewById(R.id.usagePanel);
+        View prayerCard = findViewById(R.id.prayerPanel), weatherCard = findViewById(R.id.weatherPanel);
         boolean showPrayer = LauncherSettings.flag(this, LauncherSettings.SHOW_PRAYER);
         prayerCard.setVisibility(showPrayer ? View.VISIBLE : View.GONE);
-        usageCard.setVisibility(LauncherSettings.flag(this, LauncherSettings.SHOW_USAGE) ? View.VISIBLE : View.GONE);
-        ViewGroup.MarginLayoutParams ulp = (ViewGroup.MarginLayoutParams) usageCard.getLayoutParams();
-        ulp.topMargin = showPrayer ? px(10) : 0;
-        usageCard.setLayoutParams(ulp);
+        weatherCard.setVisibility(LauncherSettings.flag(this, LauncherSettings.SHOW_WEATHER) ? View.VISIBLE : View.GONE);
+        ViewGroup.MarginLayoutParams wlp = (ViewGroup.MarginLayoutParams) weatherCard.getLayoutParams();
+        wlp.topMargin = showPrayer ? px(10) : 0;
+        weatherCard.setLayoutParams(wlp);
+        showUsage();
         findViewById(R.id.sysPanel).setVisibility(showSystem() ? View.VISIBLE : View.GONE);
         setSystemVisible(!onGridPage(section) && !onUpPage(section) && section != SETTINGS);
         if (!LauncherSettings.flag(this, LauncherSettings.SHOW_NOW)) nowPlaying.disable();
         else if (live) nowPlaying.start();
         placeNowPlaying();
+    }
+
+    /** The Most used card: switched on, and Now Playing isn't in its spot. */
+    private void showUsage() {
+        boolean on = LauncherSettings.flag(this, LauncherSettings.SHOW_USAGE) && !nowPlaying.isShown();
+        findViewById(R.id.usagePanel).setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
     private boolean showSystem() {
@@ -1471,10 +1580,11 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
      * The dock as shown. Edits save this, so entries for apps that aren't installed or are
      * disabled (skipped on screen) are dropped instead of silently taking a slot.
      */
+    /** The dock to save: what it shows, then the apps a lower "apps per row" hides (kept). */
     private List<String> dockPkgs() {
         List<String> d = new ArrayList<>();
         for (AppEntry a : dock) d.add(a.pkg);
-        return d;
+        return DockConfig.keepHidden(d, savedDock, shownDock, installedPkgs);
     }
 
     private void startMove() {
@@ -1556,6 +1666,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         clock.setText(DateFormat.format(LauncherSettings.use24h(this) ? "HH:mm" : "h:mm", c));
         date.setText(DateFormat.format("EEEE, d MMMM yyyy", c));
         prayer.refresh();
+        weather.refresh();
         // After midnight, pick up the new Bing photo of the day even if left on the home screen.
         java.time.LocalDate day = java.time.LocalDate.now();
         if (!day.equals(lastWallpaperDay)) {
@@ -1582,6 +1693,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         pills[PILL_WIFI].setContentDescription(st.pillLabel());
         system.refreshNetwork();
         prayer.onNetworkAvailable();
+        weather.onNetworkAvailable();
         loadWallpaper(); // a built-in that couldn't download yet gets another try
     }
 
@@ -1698,6 +1810,10 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     @Override
     protected void onResume() {
         super.onResume();
+        if (wantInputs) {
+            wantInputs = false;
+            main.postDelayed(this::openMenu, 400);
+        }
         resumed = true;
         hiddenSinceResume = false;
         IntentFilter tf = new IntentFilter(Intent.ACTION_TIME_TICK);
@@ -1754,7 +1870,27 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         updateLive();
+        if (hasFocus && previewStartedAt != 0) {
+            main.removeCallbacks(endPreview);
+            main.postDelayed(endPreview, 600);
+        }
     }
+
+    // Settings → Screen saver → Start now while screen savers were off: when they went back on
+    // (0: no preview running that needs it).
+    private long previewStartedAt;
+
+    /**
+     * Back in front after a preview: screen savers off again, as they were. Checked a moment
+     * later and only after the preview could have run, because the launcher briefly regains focus
+     * between the start shortcut closing and the screen saver appearing.
+     */
+    private final Runnable endPreview = () -> {
+        if (previewStartedAt == 0 || !hasWindowFocus() || SystemClock.uptimeMillis() - previewStartedAt < 2_000) return;
+        previewStartedAt = 0;
+        ScreenSaver.setEnabled(this, false);
+        settingsScreen.refreshRows();
+    };
 
     private void updateLive() {
         boolean want = resumed && hasWindowFocus();
@@ -1772,6 +1908,10 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        if (ACTION_INPUTS.equals(intent.getAction())) { // opened in onResume, once laid out
+            wantInputs = true;
+            return;
+        }
         // Home pressed while already home: close the menu and go back to the dock.
         if (!hiddenSinceResume) {
             if (section == MENU) closeMenu();
@@ -1832,6 +1972,27 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         }
     }
 
+    /** A grid cell at the current tile size (item_tile.xml holds the 5-per-row size). */
+    private void sizeHolder(Holder h) {
+        ViewGroup.LayoutParams root = h.itemView.getLayoutParams();
+        if (root.height != px(rowPitch)) {
+            root.height = px(rowPitch);
+            h.itemView.setLayoutParams(root);
+        }
+        FrameLayout.LayoutParams t = (FrameLayout.LayoutParams) h.tile.getLayoutParams();
+        if (t.width != px(tileW) || t.height != px(tileH)) {
+            t.width = px(tileW);
+            t.height = px(tileH);
+            h.tile.setLayoutParams(t);
+        }
+        FrameLayout.LayoutParams n = (FrameLayout.LayoutParams) h.name.getLayoutParams();
+        if (n.width != px(colW - 2) || n.topMargin != px(tileH + LABEL_GAP)) {
+            n.width = px(colW - 2);
+            n.topMargin = px(tileH + LABEL_GAP);
+            h.name.setLayoutParams(n);
+        }
+    }
+
     private final class GridAdapter extends RecyclerView.Adapter<Holder> {
         @NonNull
         @Override
@@ -1853,6 +2014,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         @Override
         public void onBindViewHolder(@NonNull Holder h, int position) {
             AppEntry e = apps.get(position);
+            sizeHolder(h);
             h.tile.setImageBitmap(e.tile);
             h.name.setText(e.label);
             boolean on = section == GRID && position == gridIdx;

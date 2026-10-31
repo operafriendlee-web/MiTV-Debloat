@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the Apple TV style launcher, install it on the TV and make it the default home screen.
-# Works on any Android TV / Google TV 10 or newer, from macOS, Linux or Windows (Git Bash).
+# Works on any Android TV / Google TV 8.0 or newer, from macOS, Linux or Windows (Git Bash).
 # Usage: TV=<ip> scripts/build-and-install.sh [--disable-stock]
 #   TV=<ip>          the TV's address, needed the first time only (saved in .tv)
 #   --disable-stock  also disables the TV's own launcher, and on Google TV its setup app (both
@@ -31,7 +31,7 @@ SDK_DIR="$(sed -n 's/^sdk\.dir=//p' launcher/local.properties 2>/dev/null || tru
 SDK_DIR="${SDK_DIR:-${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}}"
 [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR" ] || die "Android SDK not found: set ANDROID_HOME ($DOCS)."
 
-# ---- the TV: reachable, authorised, Android 10+
+# ---- the TV: reachable, authorised, Android 8.0+
 adb connect "$TV" >/dev/null || true
 STATE="$(adb -s "$TV" get-state 2>&1 || true)"
 case "$STATE" in
@@ -41,21 +41,21 @@ case "$STATE" in
 esac
 echo "$TV" > .tv   # reached it: the next runs (and the other scripts) don't need TV=
 SDK="$(A shell getprop ro.build.version.sdk | tr -d '\r')"
-[ "${SDK:-0}" -ge 29 ] 2>/dev/null || die "the TV runs Android SDK ${SDK:-?}; this launcher needs Android 10 (SDK 29) or newer."
+[ "${SDK:-0}" -ge 26 ] 2>/dev/null || die "the TV runs Android SDK ${SDK:-?}; this launcher needs Android 8.0 (SDK 26) or newer."
 
 # ---- remember the TV's own launcher before replacing it (any brand), for --disable-stock and
-# restore.sh. Older setups recorded it in backup/home-default.txt.
-mkdir -p backup
+# restore.sh, in this TV's backup/<serial>/. Older setups recorded it in home-default.txt.
+tv_backup
 stock_home() {
-  if [ -s backup/stock-home.txt ]; then tr -d '\r' < backup/stock-home.txt
-  elif [ -s backup/home-default.txt ]; then tail -1 backup/home-default.txt | tr -d '\r'
+  if [ -s "$B/stock-home.txt" ]; then tr -d '\r' < "$B/stock-home.txt"
+  elif [ -s "$B/home-default.txt" ]; then tail -1 "$B/home-default.txt" | tr -d '\r'
   fi
 }
 if [ -z "$(stock_home)" ]; then
   CUR="$(A shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME | tail -1 | tr -d '\r')"
   case "$CUR" in
     "$PKG"/*|*ResolverActivity*|*FallbackHome*|"") ;;  # ours, "choose an app", or none: nothing to record
-    */*) echo "$CUR" > backup/stock-home.txt; echo "TV's own launcher: $CUR (saved for restore.sh)" ;;
+    */*) echo "$CUR" > "$B/stock-home.txt"; echo "TV's own launcher: $CUR (saved for restore.sh)" ;;
   esac
 fi
 
@@ -103,16 +103,28 @@ opt appops set $PKG GET_USAGE_STATS allow
 # another app is on screen (Android 10 blocks background activity starts otherwise).
 opt appops set $PKG SYSTEM_ALERT_WINDOW allow
 
+# Updates from GitHub: the bell's "TV Home x.y is available" downloads the release and opens
+# Android's installer, which needs "install unknown apps" for the launcher.
+opt appops set $PKG REQUEST_INSTALL_PACKAGES allow
+
 # Phone remote Back/Home in any app: enable our accessibility service next to whatever is
 # already enabled (Button Mapper), never replacing it. The flag itself is recorded the first time
 # so restore.sh can put it back (it is 1 only because a service is enabled).
 SVC="$PKG/$PKG.RemoteAccessibilityService"
-if [ ! -f backup/accessibility-enabled-before.txt ]; then
-  A shell settings get secure accessibility_enabled | tr -d '\r' > backup/accessibility-enabled-before.txt
+if [ ! -f "$B/accessibility-enabled-before.txt" ]; then
+  A shell settings get secure accessibility_enabled | tr -d '\r' > "$B/accessibility-enabled-before.txt"
 fi
 CUR="$(A shell settings get secure enabled_accessibility_services | tr -d '\r')"
 case "$CUR" in
-  *"$SVC"*) ;;
+  # Already on (an update): Android doesn't always reconnect a service whose app was just
+  # replaced (the phone remote's Back/Home and the Input button go dead). Off and on again; the
+  # others stay on throughout.
+  *"$SVC"*)
+    OTHERS="$(printf %s "$CUR" | tr ':' '\n' | grep -v "^$PKG/" | paste -sd: -)"
+    if [ -n "$OTHERS" ]; then opt settings put secure enabled_accessibility_services "$OTHERS"
+    else opt settings delete secure enabled_accessibility_services; fi
+    sleep 1
+    opt settings put secure enabled_accessibility_services "$CUR" ;;
   null|"") opt settings put secure enabled_accessibility_services "$SVC" ;;
   *) opt settings put secure enabled_accessibility_services "$CUR:$SVC" ;;
 esac
@@ -124,30 +136,35 @@ opt pm grant $PKG android.permission.DUMP
 # Bell: reading the Play Store's update notifications from `dumpsys notification` also needs the
 # real PACKAGE_USAGE_STATS permission (the usage-access appop above isn't enough for that service).
 opt pm grant $PKG android.permission.PACKAGE_USAGE_STATS
+# Settings → Screen saver sets the TV's screen saver itself (Prayer time, Live log, or the
+# TV's own): some TVs can't open their screen-saver page from another app.
+opt pm grant $PKG android.permission.WRITE_SECURE_SETTINGS
+# Bell: apps with an update waiting, read from the Play Store's log lines (it rarely posts a
+# notification on a TV); also the Live log screen saver. Android 13+ asks on screen whenever an app reads the log, so the
+# launcher doesn't use it there.
+[ "$SDK" -lt 33 ] && opt pm grant $PKG android.permission.READ_LOGS
 
 # Several apps can claim HOME (stock launcher, factory test, setup leftovers): pick ours explicitly.
 A shell cmd package set-home-activity $PKG/.MainActivity
 
 if [ "${1:-}" = "--disable-stock" ]; then
-  # Google TV: the setup app also answers HOME, at a higher priority than any launcher, so with only
-  # the stock launcher disabled Home lands on setup (or the stock launcher takes it back). Disable
-  # setup first. Not when it owns the saved Wi-Fi network: disabling it deletes that network
-  # (re-join Wi-Fi from Settings, or use Ethernet, then run this again). Logged, so restore.sh
-  # turns it back on; re-enable it before a factory reset. Phone casting may stop after a reboot
-  # while it's off (the Cast receiver reads its credentials from it).
+  # Google TV: the setup app also answers HOME (its RecoveryActivity), at a higher priority than
+  # any launcher, so with only the stock launcher disabled Home lands on setup. On Sony (Realtek)
+  # TVs com.realtek.advancesetting also starts the stock launcher by name on every Home press,
+  # which only stops once that launcher is disabled. So: setup first, then the stock launcher.
+  # Both are logged, so restore.sh turns them back on; re-enable them before a factory reset.
+  # Casting from a phone (Chromecast built-in) doesn't work while the stock launcher is off.
   SETUP=com.google.android.tungsten.setupwraith
   ENABLED="$(A shell pm list packages -e "$SETUP" | tr -d '\r' || true)"
   if printf '%s\n' "$ENABLED" | grep -qx "package:$SETUP"; then
-    WIFI="$(A shell dumpsys wifi | tr -d '\r' | grep -o 'cname=[^ ]*' || true)"
-    if printf '%s\n' "$WIFI" | grep -q setupwraith; then
-      echo "note: $SETUP (Google TV setup) owns the saved Wi-Fi network, so it was left on: disabling it"
-      echo "      would delete the network. In Settings, forget the Wi-Fi network and join it again (or use"
-      echo "      Ethernet), then run this again."
-    else
-      scripts/disable.sh "$SETUP"
-    fi
+    scripts/disable.sh "$SETUP"
   fi
   STOCK="$(stock_home)"
+  # Not recorded (TV Home was already Home), but it's a Google TV: its launcher is the stock one.
+  if [ -z "$STOCK" ] && A shell pm list packages -e com.google.android.apps.tv.launcherx | tr -d '\r' \
+      | grep -qx package:com.google.android.apps.tv.launcherx; then
+    STOCK=com.google.android.apps.tv.launcherx/.home.HomeActivity
+  fi
   if [ -n "$STOCK" ]; then
     scripts/disable.sh "${STOCK%%/*}"
     A shell cmd package set-home-activity $PKG/.MainActivity >/dev/null

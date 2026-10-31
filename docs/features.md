@@ -8,17 +8,18 @@ Every feature in detail: what it shows, how to use it, and how it gets its data.
 - **Top bar** (round icon buttons):
   - **Bell** shows notifications (see below).
   - **Inputs** opens a dropdown with HDMI 1–3, AV and Live TV. It switches through the TV input framework.
+  - **The remote's Input button** works again. The TV's hotkey dispatcher opens one named screen of the stock TV launcher for it, so with that disabled the button did nothing. TV Home's accessibility service (the phone remote's, already on) now catches that one key, letting every other key through untouched, and opens the TV's own input picker when it has one (PatchWall's on Xiaomi), otherwise this dropdown (`InputsActivity`).
   - **Wi-Fi** shows the connection state by colour and opens Wi-Fi settings.
   - **Settings** (gear) opens the launcher's own Settings (see below); its last row, **About → TV settings**, opens the TV's Settings.
 - **Remote:**
-  - Down from the dock slides up to all other apps (5 per row). Up/Down always move exactly one row.
+  - Down from the dock slides up to all other apps, as many per row as the dock holds (5; 6 or 7 in **Settings → Home screen → Apps per row**). The tiles shrink so a row always fills the same width. Up/Down always move exactly one row.
   - Up from the dock goes to the top bar. Up from the top bar slides down the running-apps screen (see below).
   - Ends of the top bar and rows don't wrap.
   - Back returns to the dock.
   - Home while already home jumps back to the dock.
 - **Focus memory:** the last focused tile is remembered, even if the TV kills the launcher.
 - **Any screen size:** the layout is designed for 960 × 540 dp (1920 × 1080 at density 320). On other TVs the launcher picks the density that keeps those proportions, so a 720p box or a denser screen shows the same layout scaled to fit, not shrunk or overlapping (`UiScale.java`).
-- **Resource use:** about 45–75 MB of memory (see the benchmark). There is no blur, video or network polling; the clock updates from the system's minute tick.
+- **Resource use:** about 45–75 MB of memory (see the benchmark). There is no blur, video or network polling; the clock updates from the system's minute tick. (The Globe screen saver fetches its live data only while it's on screen.)
 - **New apps:** they appear automatically; the grid lists your most used apps first, then the rest A–Z.
 
 ## Date, Hijri date and prayer times
@@ -37,12 +38,13 @@ The top bar is four round icon buttons: **bell**, **Inputs**, **Wi-Fi**, **Setti
 
 | Source | How it's detected | OK opens |
 |---|---|---|
-| Play Store updates | The Play Store's own "updates available" notifications (channels `updates-available` / `UPDATES`), read from `dumpsys notification` at start and every 6 h. A notification listener, which this TV refuses, would be the usual way, so the launcher needs `DUMP` + `PACKAGE_USAGE_STATS` instead, granted by `build-and-install.sh`. | Play Store |
+| TV Home updates | A newer release on GitHub (`releases/latest`, so never a draft or pre-release), checked a minute after the launcher starts and every 6 h. A banner shows once per version. | The update: TV Home downloads the release APK, checks its size and SHA-256, and opens Android's installer. Choose **Update**: settings are kept, because Android only accepts an update signed with the same key. It needs "install unknown apps" for TV Home: the setup app and `build-and-install.sh` allow it, otherwise TV Home asks once. |
+| Play Store updates | One alert per app with an update waiting. The Play Store rarely posts its "updates available" notification on a TV, but every update check writes each pending app to the system log (`Finsky: UCtl: For package <app>, first update discovery…`). The launcher reads those lines at start, every hour and right after any app is updated, and keeps its own list, because the log only holds a day or two. An app leaves the list once it's updated, disabled or removed. Reading the log needs `READ_LOGS` (granted by the setup app and `build-and-install.sh` below Android 13; Android 13+ asks on screen whenever an app reads the log, so there it's read over the launcher's own ADB connection while USB debugging is on). Without either, it falls back to the Play Store's own notification, read from `dumpsys notification`. | That app's Play Store page |
 | New HDMI device | HDMI-CEC devices (child inputs under an HDMI port) that appear after start-up. Needs a CEC-capable device. | That HDMI input |
 | Bluetooth | A device connecting, or staying disconnected for 2 min. The TV remote and quick reconnects are ignored. | Bluetooth settings |
 | Low memory | RAM use above 85 %, checked every minute while the screen is on. Re-arms below 80 %. | TV Manager |
 
-Device and memory alerts also slide in a short banner over any app. The list is kept in memory, so it starts empty after the launcher restarts.
+Device and memory alerts, and a new TV Home version, also slide in a short banner over any app. The list is kept in memory, so it starts empty after the launcher restarts.
 
 ## Connection indicator
 
@@ -63,14 +65,72 @@ Device and memory alerts also slide in a short banner over any app. The list is 
 A thin bar over every other app: **network speed** (`↓ 1.2 Mb  ↑ 34 Kb`), **uptime** (`23h6m`, or `2d1h55m`), a **clock** with seconds (`15:05:36`, always 24-hour) and **elapsed time** since you left the home screen (`04:07`, or `1:04:07` past an hour; it starts again when you go back home or the screen turns off). Turn it on in **Settings → Info overlay → Show over apps**; it's off by default.
 
 - **Never on the home screen** (which has its own clock and System card), and not while the screen is off. It comes back as soon as an app is in front.
-- **Options:** what the left, centre and right show (any of the four, or nothing), top or bottom of the screen, text size (Small 12 / Medium 14 / Large 18), and a dark see-through background. The phone remote's Settings tab has the same options.
+- **Options:** what the left, centre and right show (any of the four, or nothing), top or bottom of the screen, text size (Tiny 10 / Small 12 / Medium 14 / Large 18), and a dark see-through background. The phone remote's Settings tab has the same options.
 - **Speed** is all traffic in and out of the TV (`TrafficStats`), in decimal bits per second, updated every 2 s.
 - **Cost:** it ticks once a second only while it's showing. On the home screen, with the screen off or switched off, nothing runs.
 - It can't be focused or touched, so it never takes a key press from the app underneath.
 
+## Screen savers: Prayer time, Live log and Globe
+
+Three screen savers, all on black and moving so nothing burns in. Everything about them is in TV Home's **Settings → Screen saver** (under Prayer times):
+
+- **Screen saver:** on or off. Off means the TV never starts one.
+- **Show:** OK cycles Prayer time → Live log → Globe → every other screen saver on the TV (A–Z); the row shows the one in use.
+- **Start now:** a preview of the chosen one; any key ends it (on the Globe, any key but the arrows). It works even with the screen saver off: it's switched on just for the preview and back off when you return.
+- **With Globe chosen:** a switch for each of its layers, listed under [Globe](#globe) below.
+
+Some TVs, like this Mi TV, can't open their screen-saver page from another app, so TV Home sets these itself. That needs `WRITE_SECURE_SETTINGS`, granted by the setup app and `build-and-install.sh`. Without it, the page offers **Choose a screen saver** (opens the TV's Settings) and **Start now**. The TV's own Settings → Device Preferences → Screen saver still works too.
+
+- **Prayer time:** a big clock with seconds, the date, the Hijri date and today's five prayer times, each with its icon from the prayer card, the next one in amber. The Hijri date and times come from the prayer-times data, so they match the home screen. The whole block moves to a new spot every minute, fading out and in.
+- **Live log:** the TV's log, live. Newest lines at the bottom, one per line in a small monospace font: time, level, tag and message. Errors are dim red, warnings dim amber, everything else grey. New lines glide in from below (faster when many arrive at once) rather than jumping. A small clock with seconds sits near an edge. Every minute the log block slides to a new offset (up to 24 dp either way) and the clock jumps to another edge.
+  - **When the log can't be read** (no `READ_LOGS`, and USB debugging off), it shows the Prayer time picture instead, and tries the log again every 30 s.
+  - It reads the log like the bell's Play Store updates: with `READ_LOGS` below Android 13, else over the launcher's own ADB connection while USB debugging is on.
+  - Everything in the log appears on screen, which can include Wi-Fi names or account names.
+- **Against burn-in:** nothing is white, the screen is dimmed, and the picture keeps moving even when nothing changes.
+- Any key wakes the TV (on the Globe, any key but the arrows).
+
+### Globe
+
+<img src="screensaver-globe.jpg" width="100%" alt="Globe screen saver: the Earth with day and night, the prayer lines, Makkah and your zone, live map edits and earthquakes, the space stations and Hubble, a legend and the latest edit and earthquake">
+
+The Earth as it really sits in space right now, filling 90 % of the screen's height, with what's happening on it live.
+
+- **True to the moment:** the Earth is turned to its real rotation (sidereal time), its axis tilted 23.44° against its orbit (towards the sun in June, away in December), ecliptic north up, and lit by the sun where it really stands. The viewpoint circles it once every 2 minutes, westward, so the land passes west to east. Or, with **Turning: Real time** (Settings → Screen saver), the viewpoint stays still and the Earth turns at its own speed, once a day (about a quarter of a degree a minute), with the stars standing still behind it. There the Sun stands still too, so against burn-in the viewpoint wanders slowly (±20° north and south over about 1½ hours, ±8° sideways over 4 hours), carrying the lit half and the sun glint across about a tenth of the screen; sideways it's slower than the Earth's own turning, so the Earth never looks to turn backwards. It starts facing your prayer zone either way.
+- **The sky:** instead of plain black, the Sun where it really stands (in line with the light on the globe, so it hides behind the Earth when you face the night side), the Moon where it really is and in tonight's phase (full, new, crescent or quarter as seen from the Earth, its lit side towards the Sun, its dark side faintly there; it can even cover the Sun in an eclipse), the real stars to magnitude 6.5 (the naked-eye limit) and the 109 Messier galaxies, nebulae and clusters, placed from their catalogued positions and turning with the camera's inertial view. Dim, and nothing white, for burn-in: the Sun is a warm amber disc, the Moon grey. The catalogues aren't in the app: the first time the Globe runs with Sky on, the TV downloads HYG and OpenNGC (about 17 MB, once), keeps just those 9,029 objects (a 0.3 MB file) and draws the stars from then on, offline too. The Sun and the Moon need no download: they're worked out on the TV (the Moon with the Astronomical Almanac's series, within about 0.2°).
+- **The maps:** NASA's Earth by day (Blue Marble) and at night (city lights), 1920 × 960, downloaded once from Wikimedia Commons (about 0.5 MB). Until they're in (first run, or offline), the Prayer time picture shows instead and the globe takes over once they arrive.
+- **Satellites:** the ISS, Tiangong and Hubble move at their calculated orbital height: in front of the Earth, briefly beyond its rim, then hidden behind it. Their fading trails follow the same paths.
+- **The remote:** the arrows turn it. Left and right go round it, up and down tilt it (up to 70°) to see more of the north or south. A press moves it about 10°, and holding keeps it going. Ten seconds after the last arrow it turns on its own again and levels out. Any other key ends the screen saver; it ends on the key's release, so the key never reaches the app underneath. A hint in a top corner says so for the first 8 seconds.
+- **The text:** a small clock in a top corner; under it in that bottom corner the legend (each layer's line, dot or icon, with live counts: "52 map edits a minute", "35 earthquakes today"); in the other bottom corner the latest map edit (green dot, how long ago, its comment in quotes), the latest earthquake (orange ring, how long ago, magnitude and place) and the credits. The two sides swap every minute.
+- **Against burn-in:** the globe slides to a new offset (up to 24 dp) every minute (and in Real time the viewpoint also wanders slowly, see above), the text swaps sides, the screen is dimmed and nothing is white (the brightest, the sun glint, stays near 65 %).
+- **What it costs:** about 12 % of one CPU core on the Mi TV (about 3 % of its four), about 19 % with Wind on. It's drawn with OpenGL ES 2.0, which every Android TV has: one square around the globe whose shader turns each pixel into a spot on the sphere, so there's no 3D model.
+
+Each layer has its own switch (Settings → Screen saver, with Globe chosen). Nothing is fetched for a layer that's off, and everything is fetched only while the Globe runs, then kept in the app's files for offline use.
+
+| Switch | What it shows | From | Fetched | Starts |
+|---|---|---|---|---|
+| Prayer lines | Where it's Maghrib right now (amber: the sun at −0.833°, on the side where it's setting) and Fajr (teal: −18°, where it's rising; JAKIM's Subuh times put the sun about 18° down) | Worked out on the TV | – | On |
+| Makkah and qibla | A Kaaba icon on Makkah and a dotted great-circle arc to it from your zone | – | – | On |
+| Your zone | A person icon on your prayer zone's main town (Settings → Prayer times → Zone) | – | – | On |
+| City lights | The night side's lights | NASA | Once | On |
+| Sun glint | The sun's reflection on the sea, where it would mirror towards you; none on land, ice or cloud | Worked out on the TV | – | On |
+| Sunlit rim | The atmosphere's edge, brighter and a little warm on the sun's side | Worked out on the TV | – | On |
+| Snow and sea ice | A soft white where there's snow or sea ice now (2–3 days behind) | NASA GIBS: SMAP snow, GHRSST sea ice | Every 12 h, ~100 KB | On |
+| Sky | The Sun and the Moon (in its real phase) where they stand now, real stars to magnitude 6.5 and the 109 Messier objects, dimmed for burn-in | The Sun and the Moon worked out on the TV; stars from HYG v3.8 and OpenNGC | Once, ~17 MB (0.3 MB kept) | On |
+| Clouds | Clouds by day; at night they hide the city lights | [Live Cloud Maps](https://clouds.matteason.co.uk), from EUMETSAT's satellites | Every 3 h, ~390 KB | Off |
+| Wind | 900 drifting streaks, faster and brighter where the wind is stronger (10 m above the ground) | NOAA GFS, 1°, the forecast step nearest to now | Every 3 h, ~160 KB | Off |
+| Aurora | A green glow on the night side where it's forecast | NOAA SWPC OVATION | Every 15 min, ~150 KB | On |
+| Map edits | A green dot for each OpenStreetMap edit saved in the last minute, appearing through the minute and fading over 3 minutes | OpenStreetMap minutely changesets | Every minute | On |
+| Earthquakes | Orange rings for the past day's M2.5+ quakes, sized by magnitude (7 dp at M2.5 to 30 dp at about M7); the last hour's pulse | USGS | Every 5 min | On |
+| ISS, Tiangong, Hubble | Each with its icon and its path over the last 10 minutes | CelesTrak's orbits; positions worked out on the TV | Every 12 h | On |
+| Legend | The key, the latest edit and the latest earthquake | – | – | On |
+
+- **Satellites:** CelesTrak publishes each satellite's orbit (two-line elements); `Orbit.java` works out where it is with SGP4, the model those are made for. Tested against the reference implementation: within 10 m for the ISS and Tiangong.
+- **Wind:** NOAA sends GFS as GRIB2; `Grib.java` reads it (the complex packing NOMADS uses). Its values matched Open-Meteo's GFS within 0.2 m/s. If the newest run isn't out yet, it takes the one before.
+- **Credits** (shown on screen too): Earth, snow and ice: NASA · Clouds: contains modified EUMETSAT data · Aurora and wind: NOAA · Map edits © OpenStreetMap contributors (ODbL) · Earthquakes: USGS · Orbits: CelesTrak · Stars: HYG Database (CC BY-SA 4.0) · Deep sky: OpenNGC (CC BY-SA 4.0).
+
 ## Now Playing
 
-Under the System card, whenever an app has a media session (RadioStream, Spotify, music apps):
+Under the System card, in the Most used card's place (which comes back when playback stops), whenever an app has a media session (RadioStream, Spotify, music apps):
 - **Shows:** cover art, title, artist, the app and its state (Playing / Paused).
 - **Progress:** a progress bar with time when the track has a length; **LIVE** for streams.
 - **Buttons:** **Play/Pause**, **Stop** and **Open app**. Press **Up** from the dock to reach them, Left/Right to move between them, Up again for the top bar.
@@ -99,25 +159,57 @@ The gear at the end of the top bar opens the launcher's Settings: categories on 
 
 | Category | Options |
 |---|---|
-| Home screen | Clock Auto / 12-hour / 24-hour, System card, Now Playing card, wallpaper dim (Off/Low/Medium/High), wallpaper (Bing daily photo, seven built-in photos, your pictures or none). A hidden card's column closes up. |
+| Home screen | Clock Auto / 12-hour / 24-hour, apps per row (5, 6 or 7: the dock and the app list), System card, Now Playing card (the Weather card is under Weather), wallpaper dim (Off/Low/Medium/High), wallpaper (Bing daily photo, seven built-in photos, your pictures or none). A hidden card's column closes up. |
 | Prayer times | Zone (picker), prayer card on/off, azan on/off, reminder before prayer (Off / 5 / 10 / 15 / 30 min), play azan now |
+| Weather | Weather card on/off, location (Auto or any of MET Malaysia's 440 places), air quality station (Nearest or any of the 68 APIMS stations) |
 | Most used | Most used card on/off, week starts on (Monday / Sunday), leave out (app picker) |
-| Notifications | Play Store updates, new HDMI devices, Bluetooth, low memory (each on/off), low-memory level 80/85/90 %, connection banner |
+| Screen saver | On/off, which one (OK cycles Prayer time, Live log, Globe and the TV's others), Start now (preview); with Globe chosen, a switch for each of its 16 layers (clouds and wind start off) |
+| Notifications | TV Home updates, Play Store updates, new HDMI devices, Bluetooth, connection status, low memory (each on/off), low-memory level 80/85/90 % |
 | Info overlay | Show over apps on/off (off by default), what the left, centre and right show (network speed / uptime / clock / elapsed time / nothing), position (top / bottom), text size (small / medium / large), background on/off |
-| Phone remote | Remote on/off (the banner and bell keep working when it's off), its address, forget all paired phones (press OK twice) |
+| Phone remote | Remote on/off (the banner and bell keep working when it's off), its address, forget all paired phones (press OK twice), and each paired phone with when it was last used and its own Forget (OK twice) |
 | Running apps | Apps hidden from the running-apps screen; OK shows one again |
 | About | Version, install time, APK size, TV settings |
 
-## Most used apps (this week)
+## Weather
 
-- **The card:** under the prayer card, it shows your top 5 apps this week, each with its time and a bar, plus the total. The week starts on Monday, or Sunday if you pick it in **Settings → Most used → Week starts on**, and counts up to today; it starts again from zero on that day each week.
-- **The grid:** sorted the same way, most used first. Apps you haven't used stay A–Z after them. Both refresh every time you come back to the home screen.
+Under the prayer card (its title has a ring sun, apart from the prayer card's solid one): today's weather and two air-quality readings for your place.
+
+```
+☀ WEATHER · KLANG                    ⚠ Thunderstorms warning until 20:00
+⛈ 24–32°C                    API 75 MODERATE        AQI 153 UNHEALT…
+☀ MORNING ⛈ EVENING ☀ NIGHT  ↑ Rising · +2 in 3 h   PM2.5 39 · Haze 0.78
+MET · 17:20                  APIMS · 17:00          COPERNICUS · 17:00
+```
+
+The band word sits beside the number; a long one that doesn't fit ends in "…".
+
+| Part | What it shows | From | Fetched |
+|---|---|---|---|
+| Weather | The title with the place and today's outlook in words ("Thunderstorms in places, afternoon"); today's low and high from MET (°C; not a "feels like"); an icon each for the morning, evening and night (no rain, cloudy, rain, thunderstorms); when the forecast was fetched | MET Malaysia's forecast, through data.gov.my's open API (no key) | Hourly (MET puts it out daily and sometimes revises it in the day) |
+| Warning | In amber on the title row, instead of the outlook, while a MET warning (thunderstorms, heavy rain…) names your place: "⚠ Thunderstorms warning until 20:00". MET lists districts ("Selangor (Sepang, Kuala Langat, Klang and Petaling)"), so with Location on Auto the prayer zone's areas count too. Sea warnings aren't shown. | MET Malaysia's warnings, through data.gov.my | Every 15 min (MET issues them whenever needed) |
+| API | The Air Pollutant Index at the station, its band in the band's colour (Good ≤50 blue, Moderate ≤100 green, Unhealthy ≤200 yellow, Very unhealthy ≤300 orange, Hazardous red, as soft pastels), whether it's rising or falling (the reading shown against the one 3 hours before: "↑ Rising · +2 in 3 h" in amber, "↓ Falling" in green, "→ Steady" for a move under 2), and the reading's hour | The DOE's APIMS: every station's latest hourly reading, from the same map service the APIMS portal draws from, and the station's last 24 hours (for the trend, about 6 KB) | Once an hour, when the new reading is out (from about 10 past; tried again every 10 min until it is) |
+| AQI | The US Air Quality Index for the station's spot and its band (≤50 green, ≤100 yellow, ≤150 orange, ≤200 red, ≤300 purple, above maroon, as pastels); PM2.5 (µg/m³) and haze: the aerosol optical depth, how much the air's particles dim the sunlight (about 0.1 clear, 0.5 hazy, 1 or more thick haze); the model's hour | The EU's Copernicus Atmosphere Monitoring Service (CAMS) model, through Open-Meteo (no key) | Once an hour, at the start of each hour (its values are hourly) |
+
+
+- **The two numbers use different scales.** Malaysia's API and the US AQI weigh PM2.5 differently, and the US scale is stricter, so the same air often reads higher there (e.g. API 74 Moderate, US AQI 144). The API is measured at the station; Copernicus is a forecast model for the same spot, a second opinion rather than a duplicate.
+- **Where:** Settings → Weather. **Location** is Auto by default: the prayer zone's town matched to MET's places (SGR03 → Klang), else its state's forecast (for islands, peaks and whole-state zones). **Air quality station** is Nearest by default: the APIMS station closest to the prayer zone's town (SGR03 → Klang). Both lists download when first opened.
+- **The forecast text** is MET's own (in Malay), put into English: "Ribut petir di beberapa tempat" → Thunderstorms in places; a phrase it doesn't know yet shows as MET wrote it.
+- **Offline:** everything is kept in `files/weather/` and shown from there straight away. A reading over 3 hours old turns grey, and a part that has never loaded shows "–".
+- **APIMS has no published API:** the card reads the APIMS portal's own map service (`eqms.doe.gov.my/api3/publicmapproxy/…/CAQM_MCAQM_Current_Reading`). If the DOE changes it, the API part shows "–" until the launcher is updated; the rest keeps working.
+- **Credits:** Weather: MET Malaysia (data.gov.my) · Air Pollutant Index: Department of Environment Malaysia (APIMS) · Air quality: Copernicus Atmosphere Monitoring Service, via Open-Meteo (CC BY 4.0).
+
+## Most used apps
+
+- **The card:** under the System card (Now Playing takes its spot while something plays), it shows your top 5 apps this week, each with its time and a bar, plus the total. The week starts on Monday, or Sunday if you pick it in **Settings → Most used → Week starts on**, and counts up to today; it starts again from zero on that day each week.
+- **The grid:** most used first by **all-time** use (since the launcher started counting), every app included, even the ones left out of the card. Apps never used stay A–Z after them. The phone remote's app list uses the same order. The card and the grid refresh every time you come back to the home screen.
 - **How time is counted, per day:**
   - **Visible time.** This counts watching HDMI or tuner through Live TV, which Android barely counts as "foreground".
   - **Background playback (e.g. RadioStream audio)**, but only on days the app was also on screen. On this TV a group of always-on services, such as an overlay app, MiLink and Live TV's service, log identical whole-day service times that aren't real use.
-- **Excluded apps:** Live TV (`com.mediatek.wwtv.tvcenter`) is left out of the ranking. It's only the screen for HDMI, AV and the antenna, so its time is input-watching time, not app use. It isn't on the card or in the total, and it stays in A–Z order in the grid. To leave out more apps, tick them in **Settings → Most used → Leave out** (`usage_excluded` in apps.xml is only the default).
+  - **On Android 8 and 9** (e.g. an older Mi Box), Android only reports foreground time, so that's what counts. Background playback isn't counted there.
+- **Excluded apps:** Live TV (`com.mediatek.wwtv.tvcenter`) is left out of the ranking. It's only the screen for HDMI, AV and the antenna, so its time is input-watching time, not app use. It isn't on the card or in its total. Leaving an app out only affects the card: the grid still ranks it by its use. To leave out more apps, tick them in **Settings → Most used → Leave out** (`usage_excluded` in apps.xml is only the default).
 - **Usage access:** granted by `scripts/build-and-install.sh` with `adb shell appops set my.rafhan.app.tvhome GET_USAGE_STATS allow`. Without it the card shows that command and the grid stays A–Z.
 - **History:** the launcher keeps its own copy of each day's times for the last 7 days (`files/usage-history.json`), which always includes the week's first day whichever day it starts, because this TV has no clock battery: after a power cut it boots thinking it's 1974 until internet time fixes the clock, and that jump pushes Android's own usage history out of the week. The copy is only saved while the clock is right, and each day counts whichever is larger, the copy or Android's figure. Standby doesn't affect any of this; only a real power-off does.
+- **All-time total (grid order):** when a day leaves the 7-day copy, its times are added to `files/usage-alltime.json`. The grid ranks by that total plus the days still in the copy, so it survives reboots and power cuts. It starts from zero: only use the launcher itself counted.
 
 ## System panel
 
@@ -126,7 +218,7 @@ The card sits under the pills, starting at the Inputs pill. It shows:
 | Row | Cells |
 |---|---|
 | 1 | CPU clock (average of the cores), RAM used/installed (2 GB; the ~250 MB the firmware reserves for video counts as used), storage used/total for the whole 16 GB chip as in Settings (system partitions count as used), uptime |
-| 2 | IP address, Wi-Fi signal (dBm and link speed), Private DNS, USB debugging |
+| 2 | IP address, Wi-Fi signal (dBm and link speed), Private DNS (Android 9+), USB debugging |
 
 - **Bars:** RAM and storage turn amber over 80% and red over 92%.
 - **USB debugging:** shows amber **ON :5555** while network ADB is open, and green **OFF** once you switch it off. It updates the moment the setting changes.
@@ -162,9 +254,11 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
 </table>
 
 **Pairing (once per phone):**
-1. Tap **Show PIN on TV**. A 4-digit PIN appears in the middle of the TV for 60 seconds.
-2. Type it on the phone. The phone keeps a token.
+1. Tap **Show PIN on TV**. A 6-digit PIN appears in the middle of the TV for 60 seconds.
+2. Type it on the phone. The phone's name above it starts as a random one ("Calm Otter"); change it if you like. The phone keeps a token.
 3. After 5 wrong tries the PIN is voided and you ask for a new one.
+
+**Phone names:** the list of paired phones (Settings tab) uses the name typed when pairing. Without one, it guesses from the browser, but Chrome no longer tells plain-HTTP pages the phone's model: its browser description reads "Android 10; K" on every phone, so those show as "Android phone". **Rename** next to "(this phone)" in that list names it.
 
 **Unpairing:** the broken-link button next to the TV's name.
 
@@ -175,7 +269,7 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
 | Remote | Back, Home | Everywhere, through the launcher's accessibility service |
 | Remote | Screenshot (only shown while USB debugging is on) | Captures whatever is on the TV and shows it on the phone; **Save** downloads the PNG, or press and hold it to save to Photos. DRM video (Netflix, etc.) comes out black |
 | Remote | Play/Pause | Whatever is playing (Netflix, YouTube, RadioStream…) |
-| Remote | Vol −, Mute, Vol + | Everywhere; shows the TV's volume bar |
+| Remote | Vol −, Mute, Vol + | Everywhere; shows the TV's volume bar, and the new volume number (or *Muted*) on the phone for a moment |
 | TV | **Now Playing**: app, title and state, with Play/Pause, Stop and Open app | Everywhere |
 | TV | **Prayer times**: today's five, the next one highlighted with a countdown | Everywhere |
 | TV | **System**: CPU clock, RAM, storage, IP and network, Wi-Fi signal, uptime | Everywhere |
@@ -219,7 +313,7 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
 **App manager (USB debugging on):**
 - **Disable** runs `pm disable-user --user 0`, so the app is hidden and can't run, but nothing is uninstalled and its data stays. **Enable** reverses it.
 - **Never disabled:** this launcher and any other home-screen app, the TV's keyboard, Settings, the system UI, Play Store and Play Services, and the TV-input packages. Only apps with a launcher icon are offered.
-- **Logged** on the TV in `Android/data/my.rafhan.app.tvhome/files/disabled-by-remote.txt`. `scripts/restore.sh` reads it and re-enables those apps too.
+- **Logged** in TV Home's private storage, with a copy in `Android/data/my.rafhan.app.tvhome/files/disabled-by-remote.txt` that `scripts/restore.sh` and the setup app read to re-enable those apps too. The copy is written again at start and every hour, in case a junk cleaner removed it, and apps that are back on drop off the log by themselves.
 - **Free up cache** runs `pm trim-caches`, which empties every app's cache (Android 10 doesn't let the shell clear one app's). No "clear data": that would sign you out of apps.
 
 **Settings tab:**
@@ -236,7 +330,7 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
 
 **Set up by `scripts/build-and-install.sh`:**
 - Overlay permission (`appops … SYSTEM_ALERT_WINDOW allow`). It shows the PIN, and Android 10 needs it before the remote can open apps while another app is on screen.
-- Storage permissions for the Files tab. On Android 10 that's `READ`/`WRITE_EXTERNAL_STORAGE` (plus `requestLegacyExternalStorage`); on Android 11+ the script also grants **All files access** (`appops … MANAGE_EXTERNAL_STORAGE allow`), since scoped storage otherwise blocks the Files tab, the `Wallpapers` folder and reading screenshots.
+- Storage permissions for the Files tab. On Android 8–10 that's `READ`/`WRITE_EXTERNAL_STORAGE` (plus `requestLegacyExternalStorage`); on Android 11+ the script also grants **All files access** (`appops … MANAGE_EXTERNAL_STORAGE allow`), since scoped storage otherwise blocks the Files tab, the `Wallpapers` folder and reading screenshots.
 - The accessibility service, appended next to Button Mapper's. If the Back button says it needs the accessibility service, re-run the script or enable "Home phone remote" in Settings → Device Preferences → Accessibility.
 
 **Security:**
@@ -250,7 +344,7 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
 
 ## Change the dock
 
-The dock holds **up to 5 apps**, in any order.
+The dock holds **one row of apps** (5 by default; **Settings → Home screen → Apps per row** sets 5, 6 or 7), in any order. Lowering the number hides the dock apps that no longer fit; they're kept and come back when you raise it again.
 
 **On the TV**, hold **OK** (or press **Menu**) on an app:
 - **On a dock app:**
@@ -268,7 +362,7 @@ The dock holds **up to 5 apps**, in any order.
 
 **Missing apps:** if a dock app isn't installed, or is disabled, it's skipped and the dock shows the others. It comes back by itself once the app is installed or enabled again. The next time you edit the dock it's dropped, so it doesn't hold a hidden slot.
 
-**Where it's stored:** the order is saved in `/sdcard/Android/data/my.rafhan.app.tvhome/files/dock.txt`, one package per line, left to right. You can still push that file over ADB. Delete it to go back to the built-in default (`res/values/dock.xml`).
+**Where it's stored:** in TV Home's private storage, so updates and junk cleaners can't touch it. Xiaomi's TV Manager deletes files in apps' shared folders when the TV wakes, which used to reset the dock to the built-in default (`res/values/dock.xml`). A copy is kept in `/sdcard/Android/data/my.rafhan.app.tvhome/files/dock.txt`, one package per line, left to right, and written again if a cleaner removes it. Push your own `dock.txt` there over ADB to replace the dock; TV Home takes it in the next time the home screen opens.
 
 ## Change the wallpaper
 
