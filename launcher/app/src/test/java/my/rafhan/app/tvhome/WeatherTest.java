@@ -1,6 +1,7 @@
 package my.rafhan.app.tvhome;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -28,7 +29,7 @@ public class WeatherTest {
         Weather.Day later = Weather.parseForecast(json, "Tn181", LocalDate.of(2026, 11, 6));
         assertEquals("Thunderstorms, afternoon", Weather.outlook(later));
         assertEquals("Storms pm", Weather.shortOutlook(later));
-        // Morning, evening (MET's "petang") and night, each with its own icon on the card.
+        // Morning, afternoon (MET's "petang") and night, each with its own icon on the card.
         assertEquals("No rain", Weather.word(later.morning));
         assertEquals("Storms", Weather.word(later.afternoon));
         assertEquals(Weather.STORM, Weather.kind(later.afternoon));
@@ -74,6 +75,26 @@ public class WeatherTest {
     }
 
     @Test
+    public void autoPlaceIsTheAirStationsTownWhenTheZoneHasIt() {
+        // MET's own ids (31 October 2026).
+        List<Weather.Place> places = java.util.Arrays.asList(new Weather.Place("Tn037", "Bachok"),
+                new Weather.Place("Tn033", "Kota Bharu"), new Weather.Place("Ds024", "Kota Bharu"),
+                new Weather.Place("Tn035", "Kuala Kangsar"), new Weather.Place("Tn041", "Ipoh"),
+                new Weather.Place("Tn105", "Port Dickson"), new Weather.Place("Tn104", "Seremban"),
+                new Weather.Place("Tn181", "Klang"), new Weather.Place("Ds004", "Kota Setar"));
+        String ktn = "Bachok, Kota Bharu, Machang, Pasir Mas, Pasir Puteh, Tanah Merah, Tumpat, Kuala Krai, Mukim Chiku";
+        assertEquals("Tn033", Weather.autoPlace("Kelantan", ktn, places, "Kota Bharu").id); // not Bachok
+        assertEquals("Tn037", Weather.autoPlace("Kelantan", ktn, places, null).id); // no stations yet: first area
+        assertEquals("Tn041", Weather.autoPlace("Perak", "Kuala Kangsar, Sg. Siput, Ipoh, Batu Gajah, Kampar",
+                places, "Pegoh Ipoh").id); // the station's town inside its name
+        assertEquals("Tn104", Weather.autoPlace("Negeri Sembilan", "Port Dickson, Seremban", places, "Seremban").id);
+        assertEquals("Tn181", Weather.autoPlace("Selangor", "Klang, Kuala Langat", places, "Klang").id);
+        // Kedah's station is "Alor Setar", not one of KDH01's areas: the first area as before.
+        assertEquals("Ds004", Weather.autoPlace("Kedah", "Kota Setar, Kubang Pasu, Pokok Sena (Daerah Kecil)",
+                places, "Alor Setar").id);
+    }
+
+    @Test
     public void copernicusAirQuality() {
         String json = "{\"latitude\":3.0,\"longitude\":101.399994,\"current\":{\"time\":\"2026-10-31T15:00\","
                 + "\"interval\":3600,\"us_aqi\":144,\"pm2_5\":32.2,\"pm10\":32.5,\"aerosol_optical_depth\":0.78}}";
@@ -84,6 +105,40 @@ public class WeatherTest {
         assertEquals(0.78, a.haze, 1e-9); // aerosol optical depth: hazy
         assertEquals(LocalDateTime.of(2026, 10, 31, 15, 0), a.time); // shown as Copernicus's reading time
         assertEquals("Unhealthy for sensitive groups", Weather.usAqiBand(a.aqi));
+    }
+
+    @Test
+    public void ecmwfNow() {
+        String json = "{\"latitude\":3.0,\"longitude\":101.5,\"utc_offset_seconds\":28800,\"current\":"
+                + "{\"time\":\"2026-11-01T16:00\",\"interval\":900,\"temperature_2m\":29.7,\"apparent_temperature\":35.1,\"weather_code\":53}}";
+        Weather.Now n = Weather.parseNow(json);
+        assertNotNull(n);
+        assertEquals(29.7, n.temp, 1e-9);
+        assertEquals(35.1, n.feels, 1e-9);
+        assertEquals(LocalDateTime.of(2026, 11, 1, 16, 0), n.time);
+        assertEquals(53, n.code);
+        Weather.Now noFeels = Weather.parseNow("{\"current\":{\"time\":\"x\",\"temperature_2m\":30}}");
+        assertNotNull(noFeels); // a bad time or missing feels-like still shows the temperature
+        assertTrue(Double.isNaN(noFeels.feels));
+        assertEquals(-1, noFeels.code);
+        assertNull(Weather.parseNow("{\"current\":{\"temperature_2m\":null}}"));
+    }
+
+    @Test
+    public void homeScreenEffects() {
+        assertEquals(Weather.FX_NONE, Weather.rainEffect(2)); // partly cloudy
+        assertEquals(Weather.FX_NONE, Weather.rainEffect(-1)); // no code yet
+        assertEquals(Weather.FX_MIST, Weather.rainEffect(53)); // drizzle
+        assertEquals(Weather.FX_MIST, Weather.rainEffect(45)); // fog
+        assertEquals(Weather.FX_LIGHT, Weather.rainEffect(80));
+        assertEquals(Weather.FX_RAIN, Weather.rainEffect(95));
+        assertEquals(Weather.FX_HEAVY, Weather.rainEffect(82));
+        assertTrue(Weather.thunder(95, null));
+        assertFalse(Weather.thunder(63, null));
+        LocalDateTime t = LocalDateTime.of(2026, 11, 1, 15, 0);
+        assertTrue(Weather.thunder(1, new Weather.Warning("THUNDERSTORMS WARNING", "", t, t.plusHours(3))));
+        assertTrue(Weather.thunder(1, new Weather.Warning("Amaran Ribut Petir", "", t, t.plusHours(3))));
+        assertFalse(Weather.thunder(1, new Weather.Warning("CONTINUOUS RAIN WARNING", "", t, t.plusHours(3))));
     }
 
     @Test
@@ -195,6 +250,7 @@ public class WeatherTest {
             assertTrue(Weather.parsePlaces(bad).isEmpty());
             assertTrue(Weather.parseStations(bad).isEmpty());
             assertNull(Weather.parseAir(bad));
+            assertNull(Weather.parseNow(bad));
         }
     }
 

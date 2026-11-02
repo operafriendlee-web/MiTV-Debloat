@@ -122,11 +122,12 @@ Each layer has its own switch (Settings → Screen saver, with Globe chosen). No
 | Map edits | A green dot for each OpenStreetMap edit saved in the last minute, appearing through the minute and fading over 3 minutes | OpenStreetMap minutely changesets | Every minute | On |
 | Earthquakes | Orange rings for the past day's M2.5+ quakes, sized by magnitude (7 dp at M2.5 to 30 dp at about M7); the last hour's pulse | USGS | Every 5 min | On |
 | ISS, Tiangong, Hubble | Each with its icon and its path over the last 10 minutes | CelesTrak's orbits; positions worked out on the TV | Every 12 h | On |
+| Countries | Now and then (every 10–20 s) a country facing the screen, in the left two-thirds of the globe (the land moves left to right, so it stays in view), pops up: its border drawn on the globe (by the GPU in the globe's own frame, so it turns smoothly with it, even Canada's 6,900 points), a dot on it, and a card with its flag and name (and, for a territory, its country: "Pitcairn Islands · United Kingdom"), about 7 s, following it as the globe turns. 1.5 s after you stop turning with the arrows, the country nearest the middle pops up. Malaysia gets a warm amber card, "Your country", pointing at the peninsula. Israel is shown as Palestine, with Palestine's flag (Natural Earth's separate Palestine entry is left out, so it isn't shown twice). All 242 countries and territories; a different one each time | Natural Earth 1:50m (public domain) for the names and label points; Flagpedia (flagcdn.com) for the flags | Once, 3 MB (15 KB of names and 250 KB of thinned outlines kept); each flag (~1 KB) the first time it shows | Off |
 | Legend | The key, the latest edit and the latest earthquake | – | – | On |
 
 - **Satellites:** CelesTrak publishes each satellite's orbit (two-line elements); `Orbit.java` works out where it is with SGP4, the model those are made for. Tested against the reference implementation: within 10 m for the ISS and Tiangong.
 - **Wind:** NOAA sends GFS as GRIB2; `Grib.java` reads it (the complex packing NOMADS uses). Its values matched Open-Meteo's GFS within 0.2 m/s. If the newest run isn't out yet, it takes the one before.
-- **Credits** (shown on screen too): Earth, snow and ice: NASA · Clouds: contains modified EUMETSAT data · Aurora and wind: NOAA · Map edits © OpenStreetMap contributors (ODbL) · Earthquakes: USGS · Orbits: CelesTrak · Stars: HYG Database (CC BY-SA 4.0) · Deep sky: OpenNGC (CC BY-SA 4.0).
+- **Credits** (shown on screen too): Earth, snow and ice: NASA · Clouds: contains modified EUMETSAT data · Aurora and wind: NOAA · Map edits © OpenStreetMap contributors (ODbL) · Earthquakes: USGS · Orbits: CelesTrak · Stars: HYG Database (CC BY-SA 4.0) · Deep sky: OpenNGC (CC BY-SA 4.0) · Countries: Natural Earth (public domain) · Flags: Flagpedia.
 
 ## Now Playing
 
@@ -155,20 +156,34 @@ Press **Up** on the top bar and the home screen slides away. A screen with three
 
 ## Settings (gear)
 
+**Quick actions:** hold OK (or press Menu) on the gear for a short menu under it:
+
+| Action | What it does |
+|---|---|
+| Start screen saver | Starts the chosen screen saver now |
+| Sleep timer | Turns the TV off in 30, 60, 90 or 120 min, or Off when one is set; the menu shows the minutes left. The same timer as the phone remote's |
+| Sleep now | Standby, like the remote's power button |
+| Restart… | Asks first ("Restart the TV?", Cancel focused), then restarts the TV. Without USB debugging: opens the TV's own power menu (Sleep mode, Restart, Power off) to choose there |
+| Shut down… | Asks first ("Turn the TV off completely?", Cancel focused), then turns it fully off; the remote's power button starts it again (a full start, slower than from standby). Without USB debugging: the TV's own power menu, as above |
+
+**What needs USB debugging:** nothing to sleep. An app can't put the TV to sleep, restart it or turn it off by itself, so:
+- **Sleep now and the sleep timer** use TV Home's accessibility service (the one that gives the phone remote Back and Home): its "lock screen" action turns the screen off like the power button. It stays on with USB debugging off. If it's off too, they use the loopback ADB connection instead.
+- **Restart and Shut down** run `reboot` / `reboot -p` as the TV's shell over the loopback ADB connection, so they need USB debugging on. Without it, the accessibility service opens the TV's own power menu instead, and the TV's Restart and Power off do it from there.
+
 The gear at the end of the top bar opens the launcher's Settings: categories on the left, their options on the right. Left/Right switch sides, OK changes the focused option (switches flip, choices cycle, ›-rows open a list), Back steps out (list → options → categories → home). Changes apply straight away and are kept in the launcher's `settings` prefs. Everything starts as the launcher behaved before Settings existed.
 
 | Category | Options |
 |---|---|
-| Home screen | Clock Auto / 12-hour / 24-hour, apps per row (5, 6 or 7: the dock and the app list), System card, Now Playing card (the Weather card is under Weather), wallpaper dim (Off/Low/Medium/High), wallpaper (Bing daily photo, seven built-in photos, your pictures or none). A hidden card's column closes up. |
-| Prayer times | Zone (picker), prayer card on/off, azan on/off, reminder before prayer (Off / 5 / 10 / 15 / 30 min), play azan now |
+| Home screen | Clock Auto / 12-hour / 24-hour, apps per row (5, 6 or 7: the dock and the app list), System card, Now Playing card (the Weather card is under Weather), wallpaper dim (Off/Low/Medium/High), wallpaper (Bing daily photo, seven built-in photos, your pictures or none), weather effects on/off (they work with the Weather card off too). A hidden card's column closes up. |
+| Prayer times | Prayer card on/off, zone (picker), azan on/off, reminder before prayer (Off / 5 / 10 / 15 / 30 min), play azan now |
 | Weather | Weather card on/off, location (Auto or any of MET Malaysia's 440 places), air quality station (Nearest or any of the 68 APIMS stations) |
 | Most used | Most used card on/off, week starts on (Monday / Sunday), leave out (app picker) |
-| Screen saver | On/off, which one (OK cycles Prayer time, Live log, Globe and the TV's others), Start now (preview); with Globe chosen, a switch for each of its 16 layers (clouds and wind start off) |
+| Screen saver | On/off, which one (OK cycles Prayer time, Live log, Globe and the TV's others), Start now (preview); with Globe chosen, a switch for each of its layers (clouds, wind and countries start off) |
 | Notifications | TV Home updates, Play Store updates, new HDMI devices, Bluetooth, connection status, low memory (each on/off), low-memory level 80/85/90 % |
 | Info overlay | Show over apps on/off (off by default), what the left, centre and right show (network speed / uptime / clock / elapsed time / nothing), position (top / bottom), text size (small / medium / large), background on/off |
 | Phone remote | Remote on/off (the banner and bell keep working when it's off), its address, forget all paired phones (press OK twice), and each paired phone with when it was last used and its own Forget (OK twice) |
 | Running apps | Apps hidden from the running-apps screen; OK shows one again |
-| About | Version, install time, APK size, TV settings |
+| About | Version, install time, APK size, Check for updates (shows the last check's answer, from here or the bell's 6-hourly check: "You have the latest version", or the row becomes "Update to x.y.z" to download and install it, settings kept), TV settings |
 
 ## Weather
 
@@ -176,8 +191,8 @@ Under the prayer card (its title has a ring sun, apart from the prayer card's so
 
 ```
 ☀ WEATHER · KLANG                    ⚠ Thunderstorms warning until 20:00
-⛈ 24–32°C                    API 75 MODERATE        AQI 153 UNHEALT…
-☀ MORNING ⛈ EVENING ☀ NIGHT  ↑ Rising · +2 in 3 h   PM2.5 39 · Haze 0.78
+⛈ 24–32°C FEELS 35°C        API 75 MODERATE        AQI 153 UNHEALT…
+☀ MORNING ⛈ AFTERNOON ☀ NIGHT  ↑ Rising · +2 in 3 h   PM2.5 39 · Haze 0.78
 MET · 17:20                  APIMS · 17:00          COPERNICUS · 17:00
 ```
 
@@ -185,18 +200,25 @@ The band word sits beside the number; a long one that doesn't fit ends in "…".
 
 | Part | What it shows | From | Fetched |
 |---|---|---|---|
-| Weather | The title with the place and today's outlook in words ("Thunderstorms in places, afternoon"); today's low and high from MET (°C; not a "feels like"); an icon each for the morning, evening and night (no rain, cloudy, rain, thunderstorms); when the forecast was fetched | MET Malaysia's forecast, through data.gov.my's open API (no key) | Hourly (MET puts it out daily and sometimes revises it in the day) |
+| Weather | The title with the place and today's outlook in words ("Thunderstorms in places, afternoon"); today's low and high from MET (°C); an icon each for the morning, afternoon and night (no rain, cloudy, rain, thunderstorms); when the forecast was fetched | MET Malaysia's forecast, through data.gov.my's open API (no key) | Hourly (MET puts it out daily and sometimes revises it in the day) |
 | Warning | In amber on the title row, instead of the outlook, while a MET warning (thunderstorms, heavy rain…) names your place: "⚠ Thunderstorms warning until 20:00". MET lists districts ("Selangor (Sepang, Kuala Langat, Klang and Petaling)"), so with Location on Auto the prayer zone's areas count too. Sea warnings aren't shown. | MET Malaysia's warnings, through data.gov.my | Every 15 min (MET issues them whenever needed) |
 | API | The Air Pollutant Index at the station, its band in the band's colour (Good ≤50 blue, Moderate ≤100 green, Unhealthy ≤200 yellow, Very unhealthy ≤300 orange, Hazardous red, as soft pastels), whether it's rising or falling (the reading shown against the one 3 hours before: "↑ Rising · +2 in 3 h" in amber, "↓ Falling" in green, "→ Steady" for a move under 2), and the reading's hour | The DOE's APIMS: every station's latest hourly reading, from the same map service the APIMS portal draws from, and the station's last 24 hours (for the trend, about 6 KB) | Once an hour, when the new reading is out (from about 10 past; tried again every 10 min until it is) |
+| Feels | Beside the range: how hot it feels now (heat and humidity together), after a small word: "FEELS 35°C". Hidden until it first loads. | ECMWF's IFS model for the station's spot, through Open-Meteo (no key) | Every 15 min (its values come in 15-minute steps) |
 | AQI | The US Air Quality Index for the station's spot and its band (≤50 green, ≤100 yellow, ≤150 orange, ≤200 red, ≤300 purple, above maroon, as pastels); PM2.5 (µg/m³) and haze: the aerosol optical depth, how much the air's particles dim the sunlight (about 0.1 clear, 0.5 hazy, 1 or more thick haze); the model's hour | The EU's Copernicus Atmosphere Monitoring Service (CAMS) model, through Open-Meteo (no key) | Once an hour, at the start of each hour (its values are hourly) |
 
 
 - **The two numbers use different scales.** Malaysia's API and the US AQI weigh PM2.5 differently, and the US scale is stricter, so the same air often reads higher there (e.g. API 74 Moderate, US AQI 144). The API is measured at the station; Copernicus is a forecast model for the same spot, a second opinion rather than a duplicate.
-- **Where:** Settings → Weather. **Location** is Auto by default: the prayer zone's town matched to MET's places (SGR03 → Klang), else its state's forecast (for islands, peaks and whole-state zones). **Air quality station** is Nearest by default: the APIMS station closest to the prayer zone's town (SGR03 → Klang). Both lists download when first opened.
+- **Where:** Settings → Weather. **Location** is Auto by default: the prayer zone's town matched to MET's places, else its state's forecast (for islands, peaks and whole-state zones). Where one of the zone's areas is the town of its nearest APIMS station, that one comes first, so the forecast and the air readings are for the same place: KTN01 → Kota Bharu (not Bachok, the zone's first area), PRK02 → Ipoh, NGS03 → Seremban, SGR03 → Klang. **Air quality station** is Nearest by default: the APIMS station closest to the prayer zone's town (SGR03 → Klang). Both lists download when first opened.
 - **The forecast text** is MET's own (in Malay), put into English: "Ribut petir di beberapa tempat" → Thunderstorms in places; a phrase it doesn't know yet shows as MET wrote it.
 - **Offline:** everything is kept in `files/weather/` and shown from there straight away. A reading over 3 hours old turns grey, and a part that has never loaded shows "–".
 - **APIMS has no published API:** the card reads the APIMS portal's own map service (`eqms.doe.gov.my/api3/publicmapproxy/…/CAQM_MCAQM_Current_Reading`). If the DOE changes it, the API part shows "–" until the launcher is updated; the rest keeps working.
-- **Credits:** Weather: MET Malaysia (data.gov.my) · Air Pollutant Index: Department of Environment Malaysia (APIMS) · Air quality: Copernicus Atmosphere Monitoring Service, via Open-Meteo (CC BY 4.0).
+- **Weather effects** (Settings → Home screen, on by default): the home screen shows the weather as it is now, behind the cards, from ECMWF's weather code (fetched with the feels-like, every 15 min):
+  - **Drizzle or fog:** a misty glass with fine droplets.
+  - **Rain:** drops land on the glass, more and bigger the heavier the rain, and some run down it, wiping a clear trail. Each drop shows the wallpaper behind it shrunk and upside down, as real water does.
+  - **Thunderstorm** (or a MET thunderstorm warning in force): soft lightning flashes every 5–13 s, sometimes a double flash.
+  - **Unhealthy air** (API over 100): a faint warm haze.
+  - **It plays, then settles:** for 45 seconds after home comes back to the front, or the weather gets worse, then everything stops where it is and the screen is still, so a home screen left on uses no CPU for it. It runs at about 30 frames a second while it plays. When the rain stops, the glass clears over 2–3 seconds.
+- **Credits:** Weather: MET Malaysia (data.gov.my) · Air Pollutant Index: Department of Environment Malaysia (APIMS) · Feels like: ECMWF, via Open-Meteo (CC BY 4.0) · Air quality: Copernicus Atmosphere Monitoring Service, via Open-Meteo (CC BY 4.0).
 
 ## Most used apps
 
@@ -232,9 +254,9 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="tvremote.jpg" alt="Remote tab: touchpad, Back, Home, Play/Pause, volume, screenshot, keyboard"></td>
-    <td align="center" width="33%"><img src="tvremote-tv.jpg" alt="TV tab: Now Playing, prayer times, system, power, inputs, send to TV"></td>
-    <td align="center" width="33%"><img src="tvremote-applist.jpg" alt="Apps tab: running apps with Hide and Close, then the dock"></td>
+    <td align="center" width="33%"><a href="remote-home.jpg"><img src="remote-home.jpg" alt="Remote tab: swipe pad, Back, Home, playback, volume, screenshot and keyboard"></a></td>
+    <td align="center" width="33%"><a href="remote-tv.jpg"><img src="remote-tv.jpg" alt="TV tab: Now Playing, prayer times, system, power, inputs and Send to TV"></a></td>
+    <td align="center" width="33%"><a href="remote-apps.jpg"><img src="remote-apps.jpg" alt="Apps tab: dock editing and all apps, most used first"></a></td>
   </tr>
   <tr>
     <td align="center"><b>Remote</b>: swipe to move, double-tap for OK, plus Back, Home, media, volume, typing and screenshots</td>
@@ -242,8 +264,8 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
     <td align="center"><b>Apps</b>: running apps, the dock, then every app with the most used first. Hold one for more</td>
   </tr>
   <tr>
-    <td align="center"><img src="tvremote-sendfile.jpg" alt="Files tab: TV storage and the Wallpapers shortcut"></td>
-    <td align="center"><img src="tvremote-settings.jpg" alt="Settings tab: clock, cards, wallpaper dim and wallpaper thumbnails"></td>
+    <td align="center"><a href="remote-files.jpg"><img src="remote-files.jpg" alt="Files tab: TV storage and the Wallpapers folder"></a></td>
+    <td align="center"><a href="remote-settings.jpg"><img src="remote-settings.jpg" alt="Settings tab: clock, cards, wallpaper dim and wallpaper choices"></a></td>
     <td></td>
   </tr>
   <tr>
@@ -274,7 +296,7 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
 | TV | **Prayer times**: today's five, the next one highlighted with a countdown | Everywhere |
 | TV | **System**: CPU clock, RAM, storage, IP and network, Wi-Fi signal, uptime | Everywhere |
 | TV | **Notifications** (only when there are some): what the bell shows. Tap one to open it on the TV; **Clear all** | Everywhere |
-| TV | **Power**: Sleep now, Restart (asks first), and a sleep timer (30, 60 or 90 min, or Off) | **USB debugging on** |
+| TV | **Power**: Sleep now, Restart (asks first), and a sleep timer (30, 60 or 90 min, or Off) | Sleep and the timer: TV Home's accessibility service **or** USB debugging on. Restart: **USB debugging on** |
 | TV | **Send to TV → Message**: up to 120 characters, in a box over any app (like the pairing PIN) that stays until someone presses **OK** or **Back**, on the TV remote or the phone. Volume still works while it shows | Everywhere |
 | TV | **Send to TV → Link**: YouTube links open in the YouTube app, Netflix links in Netflix, other links in a browser if the TV has one | Everywhere |
 | TV | **Inputs**: HDMI 1–3, AV, Live TV | Everywhere |
@@ -307,7 +329,7 @@ Open **http://\<TV IP\>:8486** on your phone, on the same Wi-Fi (Settings → Ph
 - **Security:** while debugging is on the launcher has ADB shell access, the same power network ADB already gives anyone on your Wi-Fi. Only paired phones can use it.
 
 **Power and sleep timer:**
-- **Sleep** presses the TV's own sleep key (`input keyevent KEYCODE_SLEEP`); **Restart** runs `reboot`. Both go through the launcher's ADB connection, so they only show while USB debugging is on.
+- **Sleep** uses TV Home's accessibility service (its "lock screen" action, like the power button), else the TV's sleep key over the launcher's ADB connection (`input keyevent KEYCODE_SLEEP`), so Sleep and the timer show while either is on. **Restart** runs `reboot` over the ADB connection, so it only shows while USB debugging is on.
 - **Sleep timer:** a banner on the TV when it's set and one minute before, then the TV sleeps. Setting a new time replaces the old one; it's forgotten if the launcher restarts.
 
 **App manager (USB debugging on):**

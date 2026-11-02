@@ -131,6 +131,7 @@ public class MainActivity extends Activity {
     private PrayerPanel prayer;
     private UsagePanel usage;
     private WeatherPanel weather;
+    private WeatherEffects weatherFx;
     /** This week (the Most used card) and all time (the grid order). */
     private UsageScores.Scores usageScores = UsageScores.Scores.NONE;
     private final GradientDrawable glowDrawable = new GradientDrawable();
@@ -165,6 +166,8 @@ public class MainActivity extends Activity {
 
     private final List<MenuItem> menuItems = new ArrayList<>();
     private int menuReturnSection = TOP, menuReturnIdx;
+    /** Rows at the top of the menu that aren't choices (a confirmation's question): 0 or 1. */
+    private int menuTop;
 
     // Dock editing: MOVE wiggles the focused dock app and Left/Right shift it; REPLACE picks which
     // dock app the chosen app replaces (dock full).
@@ -291,17 +294,18 @@ public class MainActivity extends Activity {
                 findViewById(R.id.pillSettings)};
         bellBadge = findViewById(R.id.bellBadge);
         bellBadge.setTypeface(Fonts.outfit(this, 600));
-        LinearLayout weatherCard = findViewById(R.id.weatherPanel);
+        LinearLayout weatherCard = findViewById(R.id.weatherPanel), sysCard = findViewById(R.id.sysPanel),
+                prayerCard = findViewById(R.id.prayerPanel), usageCard = findViewById(R.id.usagePanel),
+                nowCard = findViewById(R.id.nowPlaying);
         homeViews = new View[] {findViewById(R.id.clockBlock), findViewById(R.id.pills), findViewById(R.id.dockBand),
-                findViewById(R.id.sysPanel), findViewById(R.id.prayerPanel), findViewById(R.id.usagePanel),
-                weatherCard, findViewById(R.id.peekFade), findViewById(R.id.nowPlaying)};
-        system = new SystemPanel(this, findViewById(R.id.sysPanel), worker);
-        nowPlaying = new NowPlayingPanel(this, findViewById(R.id.nowPlaying), worker, shown -> {
+                sysCard, prayerCard, usageCard, weatherCard, findViewById(R.id.peekFade), nowCard};
+        system = new SystemPanel(this, sysCard, worker);
+        nowPlaying = new NowPlayingPanel(this, nowCard, worker, shown -> {
             // Playback ended while its buttons had focus: back to the dock.
             if (!shown && section == NOW && !dock.isEmpty()) moveFocus(DOCK, dockIdx);
             showUsage(); // Now Playing takes the Most used card's spot while something plays
         });
-        prayer = new PrayerPanel(this, findViewById(R.id.prayerPanel), hijri, worker);
+        prayer = new PrayerPanel(this, prayerCard, hijri, worker);
         upPage = findViewById(R.id.upPage);
         upPage.setTranslationY(-screenH);
         up = new UpScreen(this, upPage, worker, () -> {
@@ -310,8 +314,13 @@ public class MainActivity extends Activity {
             else upIdx = clamp(upIdx, up.count());
             up.setFocused(upIdx);
         });
-        usage = new UsagePanel(this, findViewById(R.id.usagePanel));
-        weather = new WeatherPanel(this, weatherCard);
+        usage = new UsagePanel(this, usageCard);
+        // The weather on the glass: over the wallpaper, under everything else.
+        weatherFx = new WeatherEffects(this, wallpaper);
+        FrameLayout rootView = findViewById(R.id.root);
+        rootView.addView(weatherFx, rootView.indexOfChild(wallpaper) + 1, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        weather = new WeatherPanel(this, weatherCard, weatherFx);
         alignSystemPanel();
         centreDatesOnClock();
 
@@ -369,21 +378,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
 
             @Override
             public void startScreenSaver() {
-                Context ctx = MainActivity.this;
-                // SystemUI's "start screen saver now" (the dock shortcut) runs the chosen one, but
-                // only while screen savers are on: switch them on for the start, then back off.
-                boolean wasOff = !ScreenSaver.enabled(ctx);
-                if (wasOff && !ScreenSaver.canSet(ctx)) {
-                    Toast.makeText(ctx, "Turn the screen saver on first", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                if (wasOff) ScreenSaver.setEnabled(ctx, true);
-                startSafely(new Intent(Intent.ACTION_MAIN)
-                        .setClassName("com.android.systemui", "com.android.systemui.Somnambulator")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-                // Switching them off again ends a running screen saver, so that waits until the
-                // preview is over and the launcher is back in front (onWindowFocusChanged).
-                if (wasOff) previewStartedAt = SystemClock.uptimeMillis();
+                startScreenSaverNow();
             }
 
             @Override
@@ -589,6 +584,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         }
     }
 
+    @SuppressLint("NotifyDataSetChanged") // the whole list is new: re-read and re-sorted
     private void applyApps(List<AppEntry> all, List<String> dockPkgs, UsageScores.Scores scores) {
         String focusedPkg = focusedPackage();
         Map<String, AppEntry> byPkg = new HashMap<>();
@@ -692,6 +688,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         });
     }
 
+    @SuppressLint("NotifyDataSetChanged") // the whole list re-sorted by the new usage
     private void applyUsage(UsageScores.Scores scores) {
         usageScores = scores;
         List<AppEntry> sorted = new ArrayList<>(apps);
@@ -856,6 +853,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     }
 
     /** Re-applies every focus visual without animation (after reloads / restore). */
+    @SuppressLint("NotifyDataSetChanged") // every tile's focused or unfocused look
     private void refreshFocusLook() {
         for (int i = 0; i < pills.length; i++) applyLook(TOP, i, section == TOP && i == topIdx, false);
         for (int i = 0; i < dockTiles.size(); i++) applyLook(DOCK, i, section == DOCK && i == dockIdx, false);
@@ -913,8 +911,8 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 v = ((Holder) vh).tile;
                 label = ((Holder) vh).name;
             }
-        } else if (sec == MENU && idx < menu.getChildCount()) {
-            ((TextView) menu.getChildAt(idx)).setTextColor(on ? 0xFFFFFFFF : 0xB3FFFFFF);
+        } else if (sec == MENU && idx + menuTop < menu.getChildCount()) {
+            ((TextView) menu.getChildAt(idx + menuTop)).setTextColor(on ? 0xFFFFFFFF : 0xB3FFFFFF);
             return;
         }
         if (v == null) return;
@@ -980,7 +978,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 radius *= scale;
                 break;
             case MENU:
-                v = menu.getChildAt(menuIdx);
+                v = menu.getChildAt(menuIdx + menuTop);
                 break;
             case NOW:
                 v = nowPlaying.button(nowIdx);
@@ -1077,6 +1075,10 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 if (down) onSide(1);
                 return true;
             case KeyEvent.KEYCODE_MENU:
+                if (section == TOP && topIdx == PILL_SETTINGS && editMode == EDIT_NONE) {
+                    if (down && e.getRepeatCount() == 0) openQuickMenu();
+                    return true;
+                }
                 if ((section != DOCK && section != GRID && section != UP) || editMode != EDIT_NONE) {
                     return super.dispatchKeyEvent(e);
                 }
@@ -1090,6 +1092,13 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                         && (section == DOCK || section == GRID || section == UP)) {
                     armedKey = KeyEvent.KEYCODE_UNKNOWN;
                     openAppMenu();
+                    return true;
+                }
+                // Hold OK on the Settings pill: quick actions (screen saver, sleep, restart, shut down).
+                if (down && e.getRepeatCount() == 1 && armedKey == code && editMode == EDIT_NONE
+                        && section == TOP && topIdx == PILL_SETTINGS) {
+                    armedKey = KeyEvent.KEYCODE_UNKNOWN;
+                    openQuickMenu();
                     return true;
                 }
                 // fall through
@@ -1173,7 +1182,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 else if (gridIdx / cols < (n - 1) / cols) moveFocus(GRID, n - 1);
                 break;
             case MENU:
-                if (menuIdx < menu.getChildCount() - 1) moveFocus(MENU, menuIdx + 1);
+                if (menuIdx < menuItems.size() - 1) moveFocus(MENU, menuIdx + 1);
                 break;
         }
     }
@@ -1439,11 +1448,32 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     }
 
     private void showMenu(List<MenuItem> items, int x, int y, int widthDp) {
+        showMenu(items, x, y, widthDp, null, 0);
+    }
+
+    /** {@code title}: a question above the choices (not a choice), or null; {@code focus}: the choice focused first. */
+    private void showMenu(List<MenuItem> items, int x, int y, int widthDp, String title, int focus) {
         menuItems.clear();
         menuItems.addAll(items);
-        menuReturnSection = section;
-        menuReturnIdx = indexIn(section);
+        // A menu opened from another menu (a submenu, a confirmation) goes back where the first one came from.
+        if (section != MENU) {
+            menuReturnSection = section;
+            menuReturnIdx = indexIn(section);
+        }
+        menu.animate().cancel(); // a submenu replacing the menu: its closing fade mustn't hide this one
         menu.removeAllViews();
+        menuTop = 0;
+        if (title != null) {
+            TextView t = new TextView(this);
+            t.setText(title);
+            t.setTextSize(13);
+            t.setTypeface(Fonts.outfit(this, 500));
+            t.setTextColor(0x8CFFFFFF);
+            t.setGravity(Gravity.CENTER_VERTICAL);
+            t.setPadding(px(16), 0, px(16), 0);
+            menu.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, px(40)));
+            menuTop = 1;
+        }
         for (MenuItem item : items) {
             TextView row = new TextView(this);
             row.setText(item.label);
@@ -1472,7 +1502,95 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         menu.setAlpha(0f);
         menu.setTranslationY(-px(8));
         menu.animate().alpha(1f).translationY(0).setDuration(160).start();
-        moveFocus(MENU, 0);
+        moveFocus(MENU, Math.max(0, Math.min(focus, items.size() - 1)));
+    }
+
+    /** Settings → Screen saver → Start now, and the quick actions' Start screen saver. */
+    private void startScreenSaverNow() {
+        Context ctx = MainActivity.this;
+        // SystemUI's "start screen saver now" (the dock shortcut) runs the chosen one, but
+        // only while screen savers are on: switch them on for the start, then back off.
+        boolean wasOff = !ScreenSaver.enabled(ctx);
+        if (wasOff && !ScreenSaver.canSet(ctx)) {
+            Toast.makeText(ctx, "Turn the screen saver on first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (wasOff) ScreenSaver.setEnabled(ctx, true);
+        startSafely(new Intent(Intent.ACTION_MAIN)
+                .setClassName("com.android.systemui", "com.android.systemui.Somnambulator")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        // Switching them off again ends a running screen saver, so that waits until the
+        // preview is over and the launcher is back in front (onWindowFocusChanged).
+        if (wasOff) previewStartedAt = SystemClock.uptimeMillis();
+    }
+
+    // ---------------------------------------------------------------- quick actions
+
+    /** Hold OK (or Menu) on the Settings pill: screen saver, sleep timer, sleep, restart, shut down. */
+    private void openQuickMenu() {
+        List<MenuItem> items = new ArrayList<>();
+        items.add(new MenuItem("Start screen saver", this::startScreenSaverNow, R.drawable.ic_screensaver, 0xB3FFFFFF));
+        SleepTimer timer = SleepTimer.current();
+        if (timer != null) {
+            long left = timer.endsAt() - System.currentTimeMillis();
+            String label = left > 0 ? "Sleep timer · " + Math.max(1, (left + 59_999) / 60_000) + " min left" : "Sleep timer";
+            items.add(new MenuItem(label, () -> openSleepTimerMenu(timer), R.drawable.ic_uptime, 0xB3FFFFFF));
+        }
+        items.add(new MenuItem("Sleep now", this::sleepNow,
+                R.drawable.ic_crescent, 0xB3FFFFFF));
+        items.add(new MenuItem("Restart…", () -> confirmPower("Restart the TV?", "Restart", false, R.drawable.ic_restart),
+                R.drawable.ic_restart, 0xB3FFFFFF));
+        items.add(new MenuItem("Shut down…", () -> confirmPower("Turn the TV off completely?", "Shut down", true, R.drawable.ic_power),
+                R.drawable.ic_power, 0xB3FFFFFF));
+        showQuickMenu(items, null, 0);
+    }
+
+    private void openSleepTimerMenu(SleepTimer timer) {
+        int[] minutes = {30, 60, 90, 120};
+        List<MenuItem> items = new ArrayList<>();
+        for (int m : minutes) items.add(new MenuItem("In " + m + " min", () -> timer.set(m)));
+        if (timer.endsAt() > 0) items.add(new MenuItem("Off", () -> timer.set(0)));
+        showQuickMenu(items, "Turn the TV off", 0);
+    }
+
+    /** Asks first; Cancel is focused, so a stray OK does nothing. */
+    private void confirmPower(String question, String yes, boolean shutDown, int icon) {
+        // Without ADB it opens the TV's own power menu, which is its own confirmation.
+        if (AdbKeys.get(this).state() != AdbKeys.State.READY) {
+            restartNow(shutDown);
+            return;
+        }
+        List<MenuItem> items = new ArrayList<>();
+        items.add(new MenuItem(yes, () -> restartNow(shutDown), icon, 0xFFFF8A80));
+        items.add(new MenuItem("Cancel", () -> { }));
+        showQuickMenu(items, question, 1);
+    }
+
+    /** Under the Settings pill, its right edge on the pill's. */
+    private void showQuickMenu(List<MenuItem> items, String title, int focus) {
+        View pill = pills[PILL_SETTINGS];
+        pill.getLocationInWindow(loc);
+        int w = 260;
+        int x = Math.max(px(24), Math.min(screenW - px(w + 24), loc[0] + Math.round(pill.getWidth() * PILL_SCALE) - px(w)));
+        showMenu(items, x, loc[1] + Math.round(pill.getHeight() * PILL_SCALE) + px(10), w, title, focus);
+    }
+
+    /** Standby (Power: the accessibility service, else ADB). Off the main thread, after the menu closes. */
+    private void sleepNow() {
+        new Thread(() -> {
+            SystemClock.sleep(300);
+            if (!Power.sleep(this)) main.post(() -> Toast.makeText(this,
+                    "Can't: turn on TV Home's accessibility service or USB debugging", Toast.LENGTH_LONG).show());
+        }, "power").start();
+    }
+
+    /** Restart or shut down over ADB; without it, the TV's own power menu opens to choose there. */
+    private void restartNow(boolean shutDown) {
+        new Thread(() -> {
+            SystemClock.sleep(300);
+            if (Power.restart(this, shutDown) == Power.FAILED) main.post(() -> Toast.makeText(this,
+                    "Can't: turn on USB debugging or TV Home's accessibility service", Toast.LENGTH_LONG).show());
+        }, "power").start();
     }
 
     private void closeMenu() {
@@ -1519,6 +1637,9 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             case LauncherSettings.SHOW_WEATHER:
                 applyCardSettings();
                 weather.settingsChanged(); // back on: show and fetch now, not at the next minute
+                break;
+            case LauncherSettings.WEATHER_FX:
+                weather.settingsChanged();
                 break;
             case LauncherSettings.WALL_DIM:
                 applyWallpaperDim();
@@ -1701,6 +1822,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     private void applyWallpaperDim() {
         int a = LauncherSettings.DIM_ALPHA[Math.max(0, Math.min(3, LauncherSettings.choice(this, LauncherSettings.WALL_DIM)))];
         wallpaper.setColorFilter(Color.argb(a, 0, 0, 0), PorterDuff.Mode.SRC_ATOP);
+        weatherFx.wallpaperChanged();
     }
 
     /**
@@ -1746,6 +1868,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             wallpaperGen++; // drop a decode still in flight
             wallpaper.setImageDrawable(null);
             wallpaper.setVisibility(View.GONE);
+            weatherFx.wallpaperChanged();
             return;
         }
         File file = found;
@@ -1897,9 +2020,11 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         if (want == live) return;
         live = want;
         if (want) {
+            weatherFx.resume();
             system.onResume();
             if (LauncherSettings.flag(this, LauncherSettings.SHOW_NOW)) nowPlaying.start();
         } else {
+            weatherFx.pause();
             system.onPause();
             nowPlaying.stop();
         }

@@ -102,6 +102,24 @@ final class Weather {
         }
     }
 
+    /**
+     * ECMWF's weather now (its IFS model, through Open-Meteo): the temperature and how hot it
+     * feels (°C), the WMO weather code (-1 if missing) and the 15-minute step it's for (Malaysian
+     * time).
+     */
+    static final class Now {
+        final double temp, feels;
+        final int code;
+        final LocalDateTime time;
+
+        Now(double temp, double feels, int code, LocalDateTime time) {
+            this.temp = temp;
+            this.feels = feels;
+            this.code = code;
+            this.time = time;
+        }
+    }
+
     /** One hourly API reading at a station (APIMS's table of the last 24 hours). */
     static final class Reading {
         final LocalDateTime time;
@@ -331,6 +349,54 @@ final class Weather {
         }
     }
 
+    /** Open-Meteo's ECMWF "current" block, or null; a missing feels-like is NaN. */
+    static Now parseNow(String json) {
+        try {
+            JSONObject cur = new JSONObject(json).getJSONObject("current");
+            if (cur.isNull("temperature_2m")) return null;
+            LocalDateTime time = null;
+            try {
+                time = LocalDateTime.parse(cur.optString("time")); // "2026-11-01T16:00", Malaysian time
+            } catch (RuntimeException ignored) {
+                // no time: the values still show
+            }
+            return new Now(cur.getDouble("temperature_2m"), cur.optDouble("apparent_temperature", Double.NaN),
+                    cur.isNull("weather_code") ? -1 : cur.optInt("weather_code", -1), time);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    // ---------------------------------------------------------------- home screen effects
+
+    /** The home screen's rain on the glass: none, mist (drizzle, fog), light rain, rain, heavy rain. */
+    static final int FX_NONE = 0, FX_MIST = 1, FX_LIGHT = 2, FX_RAIN = 3, FX_HEAVY = 4;
+
+    /** The rain effect for a WMO weather code (ECMWF's weather_code now). */
+    static int rainEffect(int wmo) {
+        switch (wmo) {
+            case 45: case 48: // fog
+            case 51: case 53: case 55: case 56: case 57: // drizzle
+                return FX_MIST;
+            case 61: case 66: case 80: // slight rain, showers
+                return FX_LIGHT;
+            case 63: case 81: case 95: // moderate rain, showers, a thunderstorm
+                return FX_RAIN;
+            case 65: case 67: case 82: case 96: case 99: // heavy rain, violent showers, storms with hail
+                return FX_HEAVY;
+            default:
+                return FX_NONE;
+        }
+    }
+
+    /** Lightning: a thunderstorm now (WMO 95–99), or a MET thunderstorm warning in force. */
+    static boolean thunder(int wmo, Warning warning) {
+        if (wmo == 95 || wmo == 96 || wmo == 99) return true;
+        if (warning == null) return false;
+        String t = warning.title.toLowerCase(Locale.ROOT);
+        return t.contains("thunder") || t.contains("ribut petir");
+    }
+
     // ---------------------------------------------------------------- choosing
 
     /**
@@ -339,12 +405,27 @@ final class Weather {
      * {@code areas} and {@code state} as zones.xml has them ("Klang, Kuala Langat", "Selangor").
      */
     static Place autoPlace(String state, String areas, List<Place> places) {
-        for (String area : areas.split(",")) {
-            for (String type : new String[]{"Tn", "Ds", "Dv", "Rc"}) {
-                for (Place p : places) {
-                    if (p.id.startsWith(type) && norm(p.name).equals(norm(area))) return p;
-                }
+        return autoPlace(state, areas, places, null);
+    }
+
+    /**
+     * As above, but an area the zone's nearest APIMS station is in comes first ("Pegoh Ipoh" →
+     * Ipoh, not the zone's first area, Kuala Kangsar), so the forecast and the air readings are for
+     * the same town. {@code stationPlace}: that station's town, or null.
+     */
+    static Place autoPlace(String state, String areas, List<Place> places, String stationPlace) {
+        if (stationPlace != null) {
+            for (String area : areas.split(",")) {
+                String a = area.trim();
+                if (a.isEmpty() || !java.util.regex.Pattern.compile("\\b" + java.util.regex.Pattern.quote(a) + "\\b",
+                        java.util.regex.Pattern.CASE_INSENSITIVE).matcher(stationPlace).find()) continue;
+                Place p = town(a, places);
+                if (p != null) return p;
             }
+        }
+        for (String area : areas.split(",")) {
+            Place p = town(area, places);
+            if (p != null) return p;
         }
         String s = norm(state);
         for (Place p : places) {
@@ -352,6 +433,16 @@ final class Weather {
             String n = norm(p.name);
             // "Wilayah Persekutuan" zones: MET splits them into "WP Kuala Lumpur" and so on.
             if (n.equals(s) || (s.startsWith("wilayah") && n.startsWith("wp"))) return p;
+        }
+        return null;
+    }
+
+    /** MET's place for an area's name: a town, else a district, Sarawak division or recreation spot. */
+    private static Place town(String area, List<Place> places) {
+        for (String type : new String[]{"Tn", "Ds", "Dv", "Rc"}) {
+            for (Place p : places) {
+                if (p.id.startsWith(type) && norm(p.name).equals(norm(area))) return p;
+            }
         }
         return null;
     }

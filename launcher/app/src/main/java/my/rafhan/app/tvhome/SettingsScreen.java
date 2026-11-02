@@ -436,11 +436,14 @@ final class SettingsScreen {
             out.add(toggle(LauncherSettings.GLOBE_ISS, "ISS", "The International Space Station"));
             out.add(toggle(LauncherSettings.GLOBE_TIANGONG, "Tiangong", "China's space station"));
             out.add(toggle(LauncherSettings.GLOBE_HUBBLE, "Hubble", "The Hubble Space Telescope"));
+            out.add(toggle(LauncherSettings.GLOBE_COUNTRIES, "Countries",
+                    "A country's flag and name now and then, and when you stop turning"));
             out.add(toggle(LauncherSettings.GLOBE_LEGEND, "Legend", "What each colour and icon means, with the latest edit and earthquake"));
         }
     }
 
     private void prayerRows(List<Row> out) {
+        out.add(toggle(LauncherSettings.SHOW_PRAYER, "Prayer card", "Today's five prayer times on the home screen"));
         String zone = LauncherSettings.zone(ctx);
         String[] z = RemoteSettings.zoneEntry(ctx, zone);
         Row r = new Row(PICKER, "Zone");
@@ -448,7 +451,6 @@ final class SettingsScreen {
         r.value = () -> zone;
         r.action = this::openZonePicker;
         out.add(r);
-        out.add(toggle(LauncherSettings.SHOW_PRAYER, "Prayer card", "Today's five prayer times on the home screen"));
         out.add(toggle(LauncherSettings.AZAN, "Azan", "Plays the azan and shows a banner at each prayer time, while the TV is on"));
         out.add(choice(LauncherSettings.PRAYER_REMINDER, "Reminder before prayer",
                 "A banner over any app, without sound, while the TV is on",
@@ -510,6 +512,7 @@ final class SettingsScreen {
         w.value = () -> name;
         w.action = this::openWallpaperPicker;
         out.add(w);
+        out.add(toggle(LauncherSettings.WEATHER_FX, "Weather effects", "Rain, lightning and haze, as it is outside"));
     }
 
     /** The name the wallpaper row shows (also the phone remote's). */
@@ -631,10 +634,61 @@ final class SettingsScreen {
         out.add(info("Version", version));
         out.add(info("Installed", installed));
         out.add(info("APK size", (new File(ctx.getPackageCodePath()).length() / 1024) + " KB"));
+        out.add(updateRow());
         Row tv = new Row(ACTION, "TV settings");
         tv.sub = "Android Settings: network, display, sound, apps";
         tv.action = host::openTvSettings;
         out.add(tv);
+    }
+
+    // Settings → About → Check for updates: a check running from here (the result is UpdateCheck's,
+    // shared with the bell's 6-hourly check).
+    private boolean updChecking;
+
+    /** Check for updates, showing the last check's answer; once one is found, the same row installs it. */
+    private Row updateRow() {
+        UpdateCheck.Release found = UpdateCheck.lastFound();
+        if (!updChecking && found != null) {
+            Row u = new Row(ACTION, "Update to " + found.version);
+            u.sub = "Download and install it" + (found.size > 0 ? " (" + size(found.size) + ")" : "") + ". Your settings are kept";
+            u.action = () -> {
+                try {
+                    ctx.startActivity(UpdateActivity.intent(ctx, found).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+                } catch (RuntimeException e) {
+                    android.widget.Toast.makeText(ctx, "Couldn't start the update", android.widget.Toast.LENGTH_SHORT).show();
+                }
+            };
+            return u;
+        }
+        Row u = new Row(ACTION, "Check for updates");
+        long at = UpdateCheck.lastCheckedAt();
+        String when = at == 0 ? "" : " · " + DateFormat.getTimeInstance(DateFormat.SHORT).format(new Date(at));
+        if (updChecking) u.sub = "Checking…";
+        else if (at != 0) u.sub = UpdateCheck.lastFailed() ? "Couldn't check. Try again" + when : "You have the latest version" + when;
+        u.action = this::checkForUpdate;
+        return u;
+    }
+
+    /** "540 KB" under a megabyte, else "1.2 MB". */
+    private static String size(long bytes) {
+        return bytes < 1_000_000 ? Math.max(1, Math.round(bytes / 1024.0)) + " KB"
+                : String.format(Locale.ROOT, "%.1f MB", bytes / 1048576.0);
+    }
+
+    private void checkForUpdate() {
+        if (updChecking) return;
+        updChecking = true;
+        refreshRows();
+        worker.execute(() -> {
+            try {
+                UpdateCheck.check(ctx);
+            } catch (Exception ignored) { // shown from UpdateCheck.lastFailed()
+            }
+            main.post(() -> {
+                updChecking = false;
+                refreshRows();
+            });
+        });
     }
 
     // ---------------------------------------------------------------- pickers
