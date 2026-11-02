@@ -58,6 +58,7 @@ public class IslamicDream extends DreamService {
         LinearLayout b = new LinearLayout(this);
         b.setOrientation(LinearLayout.VERTICAL); b.setGravity(Gravity.CENTER_HORIZONTAL);
         clock = text(110, 0xFFFFFFFF, 300); date = text(20, 0xE6FFFFFF, 400);
+clock.setSingleLine(true); clock.setHorizontallyScrolling(true); clock.setGravity(Gravity.CENTER); clock.setWidth((int) (clock.getPaint().measureText("00:00") * 1.2f));
         hijri = text(17, 0xD9E6E0D2, 400); pill = text(18, 0xFFFFFFFF, 500);
         GradientDrawable g = new GradientDrawable(); g.setColor(0x33FFFFFF); g.setCornerRadius(24 * d);
         pill.setBackground(g); pill.setPadding((int) (22 * d), (int) (8 * d), (int) (22 * d), (int) (8 * d));

@@ -60,7 +60,7 @@ if [ -z "$(stock_home)" ]; then
 fi
 
 # ---- build and install
-(cd launcher && sh ./gradlew -q assembleRelease)
+(cd launcher && bash ./gradlew -q assembleRelease)
 APK=launcher/app/build/outputs/apk/release/app-release.apk
 
 # Push + pm install instead of `adb install`: on some sets adb install waits for an on-screen confirmation.
