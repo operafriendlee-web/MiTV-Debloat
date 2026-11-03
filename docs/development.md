@@ -2,6 +2,14 @@
 
 Notes for changing and rebuilding the launcher. To install it, see the [install guides](../README.md#install); for how each feature works, see [features.md](features.md).
 
+The optional Net traffic monitor (Settings → Net traffic, new in 1.15) includes native code. Install **NDK 28.2.13676358** and **CMake 3.22.1** through the Android SDK manager (Gradle can offer to download them after accepting the SDK licences):
+
+```bash
+sdkmanager "ndk;28.2.13676358" "cmake;3.22.1"
+```
+
+Its forwarding library is pinned in `launcher/app/src/main/cpp/zdtun/`, built separately as `libzdtun.so` for ARM32/ARM64/x86/x86_64 with 16 KB page alignment. The engine (`libzdtun.so` and its bridge `libtraffic.so`) is **not packed into the APK**: the `netEngineRelease` Gradle task copies it to `launcher/app/build/outputs/netengine/release/netengine-<cpu>-<lib>.so` and writes each file's SHA-256 into the APK as `assets/netengine.txt`. The app loads only files matching those fingerprints, from where `scripts/build-and-install.sh` pushes a local build's engine (`/sdcard/Android/data/my.rafhan.app.tvhome/files/netengine/`), or else downloaded from the installed version's GitHub release, where CI attaches the files with the library's licence texts. Keep the corresponding source and LGPL/GPL notices with distributions; see that directory's `UPSTREAM.md`. No capture is enabled by building or installing the APK. See [Net traffic](features.md#net-traffic-internet-connection-monitor) for consent, limitations, and the live-network test checklist.
+
 ## Folder structure
 
 ```
@@ -15,6 +23,7 @@ RFHN-TV-Launcher/
 │   ├── getprop.txt, settings-{global,secure,system}.txt
 │   ├── stock-home.txt           the TV's own launcher, recorded by build-and-install.sh (restore.sh returns to it)
 │   ├── home-default.txt, home-candidates.txt, accessibility.txt, accessibility-enabled-before.txt, private-dns-before.txt
+│   ├── settings-before.txt      settings the TUI's Tweaks changed, with their old values (`<ns> <key> <value|null>`)
 │   └── dumpsys/                 activities/services of every manufacturer package that was checked
 ├── launcher/                    the launcher source (Java, AndroidX RecyclerView, minSdk 26, targetSdk 36), incl. the phone remote
 │   ├── app/src/main/            the launcher, the phone remote page (assets/remote.html) and its resources
@@ -106,6 +115,9 @@ A Rust ([ratatui](https://ratatui.rs)) front end to everything the scripts do, w
   - It finds TVs from `adb mdns services` (Wireless debugging, including TVs waiting to pair) and by scanning the /24 network for port 5555. It waits for "Allow USB debugging?" by itself and supports pairing codes.
   - *Set up my TV* (`flows::setup_all`) is install, the recommended clean-up and optionally Private DNS, as one plan with one Home check at the end.
   - Quitting while connected offers `flows::debugging_off`.
+  - *Overview*, *Health* and *Playback* are read-only. Each is one batched `adb shell` read (`Worker::read_batch`, split on a marker line). The parsers are pure: `health.rs` (`/proc/stat`, `/proc/net/dev` and every `/proc/<pid>/stat` sampled 2 s apart, before the heavier reads, with names from `ps`; `/proc/meminfo`, `df`, `thermalservice`, `hardware_properties`, `dumpsys meminfo`) and `media.rs` (codec XML, `dumpsys display`, `dumpsys audio`, surround settings, DRM). Their tests run on output captured from a Mi TV in `src/testdata/`.
+  - The shell can't read the Widevine level (`dumpsys media.drm` is empty on Android 10), so Playback runs a tiny Java reader as the shell user. Its source is `tui/drminfo/DrmInfo.java`; `tui/drminfo/build.sh` (JDK 17 + Android SDK) compiles it into `drminfo.jar` (2 KB, committed, embedded with `include_bytes!`, so building the app needs no Android SDK). The app pushes it to `/data/local/tmp`, runs `app_process -cp <jar> /system/bin tvhome.DrmInfo`, which prints `key=value` lines from `MediaDrm`, and deletes it. It works on any TV, with or without TV Home. After changing `DrmInfo.java`, run `build.sh` and commit both.
+  - *Tweaks* changes Android settings through `flows::set_settings`, which records each old value (`null` if unset) in `backup/<serial>/settings-before.txt` (first value wins), then runs `settings put`. Undo puts each back, or deletes it if it was unset; `restore.sh` reads the same file.
   - *Save a support report* (`report.rs`) writes the TV's details, its records and the end of the log (pairing codes masked) to Downloads.
   - `--ascii` (automatic in Windows' classic console) and `NO_COLOR`/`--no-color` rewrite the finished frame (`ui::plain`), so screens don't need to know about either. A test checks every non-ASCII symbol in the screens has a stand-in.
 - **Runs `adb` directly** (no shell), so Windows shells can't rewrite paths. Every call is pinned with `-s <serial>`.
@@ -120,7 +132,7 @@ A Rust ([ratatui](https://ratatui.rs)) front end to everything the scripts do, w
   - Restore follows `restore.sh` step by step.
 - **Debloat notes:**
   - `catalog.toml` is this project's own reviewed notes. *never* matches `AppManager.PROTECTED` in the launcher, and a test keeps the two in step.
-  - `catalog-cleanyourtv.toml` is generated from [cleanyourtv](https://github.com/Gathin23/cleanyourtv)'s 370+ per-model lists (MIT) by `tools/import_cleanyourtv.py`. It pre-ticks only ads, tracking and promos that owners of at least two TVs disabled, and never anything that looks like a system part (a test checks this).
+  - `catalog-cleanyourtv.toml` is generated from [cleanyourtv](https://github.com/Gathin23/cleanyourtv)'s 420+ per-model lists (MIT) by `tools/import_cleanyourtv.py`. It pre-ticks only ads, tracking and promos that owners of at least two TVs disabled, and never anything that looks like a system part (a test checks this).
   - Ours wins for any package in both. To refresh it, clone cleanyourtv and run `python3 -I tui/tools/import_cleanyourtv.py <clone> tui/catalog-cleanyourtv.toml`.
 
 ```bash

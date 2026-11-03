@@ -81,7 +81,7 @@ final class NowPlayingPanel {
     private final AdbKeys adb;
     private final AudioManager audio;
 
-    private final ImageView cover;
+    private final ArtCoverView cover;
     private final TextView source, title, artist, time;
     private final Bar bar;
     private final ImageView[] buttons = new ImageView[BUTTONS];
@@ -140,11 +140,13 @@ final class NowPlayingPanel {
         // The cover fills the card's left side edge to edge; the card's rounded outline clips it.
         card.setPadding(0, 0, px(12), 0);
         card.setClipToOutline(true);
+        // Use the same neutral glass base as the other cards, without an artwork color wash.
+        card.setBackgroundResource(R.drawable.sys_bg);
+        // Carry the shared card border across the edge-to-edge artwork as well.
+        card.setForeground(ctx.getDrawable(R.drawable.np_gloss));
 
-        cover = new ImageView(ctx);
-        cover.setBackgroundColor(0xFF1C1C1E);
+        cover = new ArtCoverView(ctx);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        cover.setForeground(ctx.getDrawable(R.drawable.np_gloss)); // glossy sheen, drawn over the art
         card.addView(cover, new LinearLayout.LayoutParams(px(COVER), px(COVER)));
 
         LinearLayout col = new LinearLayout(ctx);
@@ -210,6 +212,7 @@ final class NowPlayingPanel {
     /** Settings → Now Playing card off: stop watching and take the card down. */
     void disable() {
         stop();
+        clearCover();
         if (shown) {
             shown = false;
             card.setVisibility(View.GONE);
@@ -452,6 +455,8 @@ final class NowPlayingPanel {
             buttons[PLAY_PAUSE].setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
             showCover(i);
             updateProgress();
+        } else {
+            clearCover();
         }
         if (visible != shown) {
             shown = visible;
@@ -464,7 +469,9 @@ final class NowPlayingPanel {
 
     private boolean needsTick() {
         Info i = info;
-        return started && visibleOnScreen && i != null && i.state == PlaybackState.STATE_PLAYING;
+        // A live stream's label is static; the helper already reports track/state changes.
+        return started && visibleOnScreen && i != null && i.state == PlaybackState.STATE_PLAYING
+                && (i.duration > 0 || helper == null);
     }
 
     private void updateProgress() {
@@ -491,6 +498,15 @@ final class NowPlayingPanel {
         }
     }
 
+    private void clearCover() {
+        // No hidden artwork or session bitmap retained after playback ends.
+        coverKey = null;
+        helperArt = null;
+        helperArtId = 0;
+        cover.setImageDrawable(null);
+        cover.artworkChanged();
+    }
+
     /** Helper's cover art, else an http(s) art URI, else the app's icon. */
     private void showCover(Info i) {
         String key;
@@ -512,7 +528,7 @@ final class NowPlayingPanel {
         worker.execute(() -> {
             Bitmap loaded = download(uri, size);
             if (loaded != null) main.post(() -> {
-                if (key.equals(coverKey)) setCover(loaded);
+                if (started && key.equals(coverKey)) setCover(loaded);
             });
         });
     }
@@ -527,11 +543,13 @@ final class NowPlayingPanel {
             cover.setImageResource(R.drawable.ic_music);
             cover.setScaleType(ImageView.ScaleType.CENTER);
         }
+        cover.artworkChanged();
     }
 
     private void setCover(Bitmap bmp) {
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         cover.setImageBitmap(bmp);
+        cover.artworkChanged();
     }
 
     private static Bitmap download(String uri, int size) {

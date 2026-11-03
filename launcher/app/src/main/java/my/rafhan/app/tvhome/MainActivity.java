@@ -106,7 +106,10 @@ public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     /** Open the Inputs menu (the remote's Input button on a TV without its own picker: InputsActivity). */
     static final String ACTION_INPUTS = "my.rafhan.app.tvhome.action.INPUTS";
-    private boolean wantInputs;
+    /** The Net traffic monitor's notification: Settings, on Net traffic. */
+    static final String ACTION_NET_TRAFFIC = "my.rafhan.app.tvhome.action.NET_TRAFFIC";
+    private static final int REQUEST_VPN = 72;
+    private boolean wantInputs, wantNetTraffic;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Map<String, AppEntry> rendered = new HashMap<>();
     private final List<ImageView> dockTiles = new ArrayList<>();
@@ -263,6 +266,7 @@ public class MainActivity extends Activity {
         setContentView(R.layout.activity_main);
         dp = getResources().getDisplayMetrics().density;
         wantInputs = ACTION_INPUTS.equals(getIntent().getAction());
+        wantNetTraffic = ACTION_NET_TRAFFIC.equals(getIntent().getAction());
         // After an update Android sometimes leaves the accessibility service unconnected.
         RemoteAccessibilityService.checkSoon(this);
         screenW = getResources().getDisplayMetrics().widthPixels;
@@ -394,6 +398,20 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             public void previewWallpaper(String id) {
                 wallpaperPreview = id;
                 loadWallpaper();
+            }
+
+            @Override
+            public void startNetTraffic() {
+                Intent approve;
+                try {
+                    approve = android.net.VpnService.prepare(MainActivity.this);
+                } catch (RuntimeException e) {
+                    TrafficMonitor.status = "VPN approval isn't available on this TV";
+                    settingsScreen.refreshRows();
+                    return;
+                }
+                if (approve == null) startNetCapture(); // approved before
+                else startActivityForResult(approve, REQUEST_VPN);
             }
         });
         LauncherSettings.addListener(settingsChanged);
@@ -1508,20 +1526,34 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     /** Settings → Screen saver → Start now, and the quick actions' Start screen saver. */
     private void startScreenSaverNow() {
         Context ctx = MainActivity.this;
+        android.content.ComponentName chosen = ScreenSaver.current(ctx);
         // SystemUI's "start screen saver now" (the dock shortcut) runs the chosen one, but
         // only while screen savers are on: switch them on for the start, then back off.
         boolean wasOff = !ScreenSaver.enabled(ctx);
-        if (wasOff && !ScreenSaver.canSet(ctx)) {
-            Toast.makeText(ctx, "Turn the screen saver on first", Toast.LENGTH_SHORT).show();
-            return;
+        if (!wasOff || ScreenSaver.canSet(ctx)) {
+            if (wasOff) ScreenSaver.setEnabled(ctx, true);
+            try {
+                startActivity(new Intent(Intent.ACTION_MAIN)
+                        .setClassName("com.android.systemui", "com.android.systemui.Somnambulator")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                // Switching them off again ends a running screen saver, so that waits until the
+                // preview is over and the launcher is back in front (onWindowFocusChanged).
+                if (wasOff) previewStartedAt = SystemClock.uptimeMillis();
+                return;
+            } catch (ActivityNotFoundException | SecurityException e) {
+                // Google TV has no such screen: TV Home shows its own screen savers itself.
+                if (wasOff) ScreenSaver.setEnabled(ctx, false);
+            }
         }
-        if (wasOff) ScreenSaver.setEnabled(ctx, true);
-        startSafely(new Intent(Intent.ACTION_MAIN)
-                .setClassName("com.android.systemui", "com.android.systemui.Somnambulator")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        // Switching them off again ends a running screen saver, so that waits until the
-        // preview is over and the launcher is back in front (onWindowFocusChanged).
-        if (wasOff) previewStartedAt = SystemClock.uptimeMillis();
+        Intent own = SaverActivity.intent(ctx, chosen);
+        if (own != null) {
+            startActivity(own);
+        } else if (wasOff && !ScreenSaver.canSet(ctx)) {
+            Toast.makeText(ctx, "Turn the screen saver on first", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(ctx, "This TV starts " + ScreenSaver.label(ctx, chosen)
+                    + " only by itself, when it's been idle", Toast.LENGTH_LONG).show();
+        }
     }
 
     // ---------------------------------------------------------------- quick actions
@@ -1608,6 +1640,28 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     }
 
     // ---------------------------------------------------------------- settings
+
+    /** Android's VPN approval (Net traffic → Start capture) came back. */
+    @Override
+    protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != REQUEST_VPN) return;
+        if (result == RESULT_OK) startNetCapture();
+        else TrafficMonitor.status = "VPN approval was cancelled";
+        settingsScreen.refreshRows();
+    }
+
+    private void startNetCapture() {
+        TrafficMonitor.preparing = true; // the spinner shows now, not when the service gets going
+        TrafficMonitor.status = "Starting…";
+        try {
+            startForegroundService(new Intent(this, TrafficVpnService.class));
+        } catch (RuntimeException e) {
+            TrafficMonitor.preparing = false;
+            TrafficMonitor.status = "The monitor couldn't start: " + e.getClass().getSimpleName();
+        }
+        settingsScreen.refreshRows();
+    }
 
     private void openSettings() {
         settingsScreen.open();
@@ -1937,6 +1991,13 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             wantInputs = false;
             main.postDelayed(this::openMenu, 400);
         }
+        if (wantNetTraffic) {
+            wantNetTraffic = false;
+            main.postDelayed(() -> {
+                settingsScreen.openNetTraffic();
+                moveFocus(SETTINGS, 0);
+            }, 400);
+        }
         resumed = true;
         hiddenSinceResume = false;
         IntentFilter tf = new IntentFilter(Intent.ACTION_TIME_TICK);
@@ -2035,6 +2096,10 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         super.onNewIntent(intent);
         if (ACTION_INPUTS.equals(intent.getAction())) { // opened in onResume, once laid out
             wantInputs = true;
+            return;
+        }
+        if (ACTION_NET_TRAFFIC.equals(intent.getAction())) {
+            wantNetTraffic = true;
             return;
         }
         // Home pressed while already home: close the menu and go back to the dock.
