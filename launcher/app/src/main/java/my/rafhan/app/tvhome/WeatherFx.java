@@ -286,6 +286,7 @@ final class WeatherFx extends View {
             } finally {
                 if (c != null) c.disconnect();
             }
+            if (code == 3) code = MetWarning.adjust(code);
             int aqiVal = -1;
             String aqiTxt = "";
             try {
