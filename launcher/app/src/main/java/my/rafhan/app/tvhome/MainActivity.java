@@ -1381,7 +1381,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     private void openMenu() {
         List<MenuItem> items = new ArrayList<>();
         for (TvInputs.Item in : TvInputs.load(this)) items.add(new MenuItem(in.label, () -> startSafely(in.intent)));
-        if (items.isEmpty()) return;
+        if (items.isEmpty()) { moveFocus(UP, 0); return; }
         View pill = pills[PILL_INPUTS];
         pill.getLocationInWindow(loc);
         showMenu(items, Math.min(loc[0], screenW - px(240 + 24)), loc[1] + Math.round(pill.getHeight() * PILL_SCALE) + px(10));
