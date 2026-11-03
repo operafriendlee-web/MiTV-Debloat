@@ -1805,8 +1805,8 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     /** Wi-Fi button: icon and colour show connected / no internet / disconnected. */
     private void updateNetwork() {
         NetState st = NetState.read(this);
-        if (st.state != netShown) {
-            netShown = st.state;
+        if (st.icon() * 4 + st.state != netShown) {
+            netShown = st.icon() * 4 + st.state;
             ImageView wifi = (ImageView) pills[PILL_WIFI];
             wifi.setImageResource(st.icon());
             wifi.setImageTintList(android.content.res.ColorStateList.valueOf(st.color()));

@@ -48,6 +48,7 @@ final class NetState {
 
     int icon() {
         if (state == DISCONNECTED) return R.drawable.ic_wifi_off;
+        if ("Ethernet".equals(name)) return R.drawable.ic_lan;
         if (state == NO_INTERNET) return R.drawable.ic_wifi_alert;
         return R.drawable.ic_wifi;
     }
