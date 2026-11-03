@@ -38,7 +38,7 @@ final class RunningApps {
 
     // "#30: prcp   FGS  27297:my.rafhan.app.radiostream/u0a274  activity=recents"
     private static final Pattern LINE = Pattern.compile(
-            "#\\d+:\\s+(\\S+(?:\\+\\s*\\d+)?)\\s+(\\S+)\\s+(\\d+):([\\w.]+)(?::[\\w.]+)?/\\S+(.*)");
+            "#\\d+:\\s+(\\S+(?:\\+\\s*\\d+)?)\\s+(\\S+)\\s+(?:[A-Z-]{6}\\s+)?(\\d+):([\\w.]+)(?::[\\w.]+)?/\\S+(.*)");
 
     private static final String PREFS = "running_apps", HIDDEN = "hidden";
 
