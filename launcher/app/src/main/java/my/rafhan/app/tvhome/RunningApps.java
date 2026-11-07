@@ -170,8 +170,9 @@ final class RunningApps {
             }
         }
         ctx.getSystemService(ActivityManager.class).killBackgroundProcesses(pkg);
+        try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
         for (App a : list(ctx)) {
-            if (a.entry.pkg.equals(pkg)) {
+            if (a.entry.pkg.equals(pkg) && !java.util.Collections.disjoint(a.pids, app.pids)) {
                 return app.entry.label + " is still running. Turn on USB debugging to close apps that are playing or on screen.";
             }
         }
