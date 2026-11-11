@@ -184,6 +184,7 @@ final class RunningApps {
     /** Force-closes {@code pkg}; returns a short message for the screen. Blocking. */
     static String forceStop(Context ctx, App app) {
         String pkg = app.entry.pkg;
+        android.util.Log.i("RunningApps", "forceStop " + pkg + " pids=" + app.pids + " adb=" + AdbKeys.get(ctx).state());
         AdbKeys adb = AdbKeys.get(ctx);
         if (adb.state() == AdbKeys.State.READY) {
             AdbKeys.Hid h = adb.shell("am force-stop " + pkg);
@@ -198,9 +199,11 @@ final class RunningApps {
             }
         }
         ctx.getSystemService(ActivityManager.class).killBackgroundProcesses(pkg);
+        android.util.Log.i("RunningApps", "killBackgroundProcesses dihantar untuk " + pkg);
         try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
         for (App a : list(ctx)) {
             if (a.entry.pkg.equals(pkg) && !java.util.Collections.disjoint(a.pids, app.pids)) {
+                android.util.Log.i("RunningApps", "MASIH ADA " + pkg + " pidLama=" + app.pids + " pidKini=" + a.pids + " state=" + a.state);
                 return app.entry.label + " is still running. Turn on USB debugging to close apps that are playing or on screen.";
             }
         }
