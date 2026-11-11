@@ -204,7 +204,7 @@ final class RunningApps {
         for (App a : list(ctx)) {
             if (a.entry.pkg.equals(pkg) && !java.util.Collections.disjoint(a.pids, app.pids)) {
                 android.util.Log.i("RunningApps", "MASIH ADA " + pkg + " pidLama=" + app.pids + " pidKini=" + a.pids + " state=" + a.state);
-                return app.entry.label + " is still running. Turn on USB debugging to close apps that are playing or on screen.";
+                return app.entry.label + " is still running. Turn on USB debugging to close apps that are playing or on screen. [old=" + app.pids + " now=" + a.pids + " " + a.state + " adb=" + adb.state() + "]";
             }
         }
         return app.entry.label + " closed";
