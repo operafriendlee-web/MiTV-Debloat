@@ -8,7 +8,7 @@ Every feature in detail: what it shows, how to use it, and how it gets its data.
 - **Top bar** (round icon buttons):
   - **Bell** shows notifications (see below).
   - **Inputs** opens a dropdown with HDMI 1–3, AV and Live TV. It switches through the TV input framework.
-  - **The remote's Input button** works again. The TV's hotkey dispatcher opens one named screen of the stock TV launcher for it, so with that disabled the button did nothing. TV Home's accessibility service (the phone remote's, already on) now catches that one key, letting every other key through untouched, and opens the TV's own input picker when it has one (PatchWall's on Xiaomi), otherwise this dropdown (`InputsActivity`).
+  - **The remote's Input button** works again. The TV's hotkey dispatcher opens one named screen of the stock TV launcher for it, so with that disabled the button did nothing. TV Home's accessibility service (the phone remote's, already on) now catches that key (and any set up in [Button Mapper](#button-mapper)), letting every other key through untouched, and opens the TV's own input picker when it has one (PatchWall's on Xiaomi), otherwise this dropdown (`InputsActivity`).
   - **Wi-Fi** shows the connection state by colour and opens Wi-Fi settings.
   - **Settings** (gear) opens the launcher's own Settings (see below); its last row, **About → TV settings**, opens the TV's Settings.
 - **Remote:**
@@ -19,8 +19,9 @@ Every feature in detail: what it shows, how to use it, and how it gets its data.
   - Home while already home jumps back to the dock.
 - **Focus memory:** the last focused tile is remembered, even if the TV kills the launcher.
 - **Any screen size:** the layout is designed for 960 × 540 dp (1920 × 1080 at density 320). On other TVs the launcher picks the density that keeps those proportions, so a 720p box or a denser screen shows the same layout scaled to fit, not shrunk or overlapping (`UiScale.java`).
+- **Button Mapper** (Settings → Button Mapper, optional): new actions for the remote's buttons on a single, double or long press (see [Button Mapper](#button-mapper)).
 - **Net traffic** (Settings → Net traffic, optional): which app connects to which server and country, as a list with details and as routes on the Globe (see [Net traffic](#net-traffic-internet-connection-monitor)).
-- **Resource use:** about 45–75 MB of memory (see the benchmark). There is no blur, video or network polling; the clock updates from the system's minute tick. (The Globe screen saver fetches its live data only while it's on screen.)
+- **Resource use:** about 85–115 MB of memory, idle to after navigating (see the benchmark). There is no blur, video or network polling; the clock updates from the system's minute tick. (The Globe screen saver fetches its live data only while it's on screen.)
 - **New apps:** they appear automatically; the grid lists your most used apps first, then the rest A–Z.
 
 ## Date, Hijri date and prayer times
@@ -29,7 +30,7 @@ The top left shows the big clock with the date and Hijri date stacked beside it,
 
 - **Fetching:** the whole month is fetched once from `esolatApi/takwimsolat&period=month&zone=SGR03` and cached on the TV. It's fetched again only when the month changes. If there's no network, it retries when the network comes back, at most once a minute. The display updates on the clock's minute tick.
 - **Azan:** at each of the five prayer times the launcher plays the azan (`res/raw/azan.mp3`, bundled in the APK) and slides in a banner like "Azan Maghrib · 19:01" over any app, like the Wi-Fi banner. Apps that support it (Netflix, YouTube) pause and resume afterwards. It only plays while the screen is on and within 2 minutes of the time, and not until the clock is set after a power cut. Switch it off in **Settings → Prayer times → Azan**; **Play azan now** plays it straight away to check the volume. A silent reminder banner ("Maghrib in 5 min · 19:01") also comes before each prayer; set how early (Off, 5, 10, 15 or 30 min) in **Settings → Prayer times → Reminder before prayer**. To use another recording, replace `azan.mp3` and rebuild.
-- **Zone:** pick it in **Settings → Prayer times → Zone** (all 60 JAKIM zones, from e-solat.gov.my). The card switches straight away and fetches that zone's month. `prayer_zone` in strings.xml is only the default.
+- **Zone:** **Auto** by default, shown as "Auto (SGR03)": the JAKIM zone the TV is in, from its network location (Google's, from nearby Wi-Fi networks). It's matched offline to the nearest of a few main towns per zone, so no online service is asked; near a zone border it can pick the neighbour, where the times differ by a minute or two. Mountain-top zones (Gunung Jerai, Bukit Larut, Gunung Kinabalu, Kampung Patarikan) are never picked automatically. It's looked up when the launcher starts and, if it wasn't found yet, when the network comes back. With no location (location off, no answer, or outside Malaysia) it stays on the last zone found, else `prayer_zone` in strings.xml (SGR03). Or pick one of the 60 JAKIM zones (from e-solat.gov.my) in **Settings → Prayer times → Zone**; Auto is the first row. The card switches straight away and fetches that zone's month.
 
 ## Notifications (bell)
 
@@ -39,7 +40,7 @@ The top bar is four round icon buttons: **bell**, **Inputs**, **Wi-Fi**, **Setti
 
 | Source | How it's detected | OK opens |
 |---|---|---|
-| TV Home updates | A newer release on GitHub (`releases/latest`, so never a draft or pre-release), checked a minute after the launcher starts and every 6 h. A banner shows once per version. | The update: TV Home downloads the release APK, checks its size and SHA-256, and opens Android's installer. Choose **Update**: settings are kept, because Android only accepts an update signed with the same key. It needs "install unknown apps" for TV Home: the setup app and `build-and-install.sh` allow it, otherwise TV Home asks once. |
+| TV Home updates | A newer release on GitHub (`releases/latest`, so never a draft or pre-release), checked a minute after the launcher starts, then once a day (an hour later if a check couldn't reach GitHub). A banner shows once per version. | The update: TV Home downloads the release APK, checks its size and SHA-256, and opens Android's installer. Choose **Update**: settings are kept, because Android only accepts an update signed with the same key. It needs "install unknown apps" for TV Home: the setup app and `build-and-install.sh` allow it, otherwise TV Home asks once. |
 | Play Store updates | One alert per app with an update waiting. The Play Store rarely posts its "updates available" notification on a TV, but every update check writes each pending app to the system log (`Finsky: UCtl: For package <app>, first update discovery…`). The launcher reads those lines at start, every hour and right after any app is updated, and keeps its own list, because the log only holds a day or two. An app leaves the list once it's updated, disabled or removed. Reading the log needs `READ_LOGS` (granted by the setup app and `build-and-install.sh` below Android 13; Android 13+ asks on screen whenever an app reads the log, so there it's read over the launcher's own ADB connection while USB debugging is on). Without either, it falls back to the Play Store's own notification, read from `dumpsys notification`. | That app's Play Store page |
 | New HDMI device | HDMI-CEC devices (child inputs under an HDMI port) that appear after start-up. Needs a CEC-capable device. | That HDMI input |
 | Bluetooth | A device connecting, or staying disconnected for 2 min. The TV remote and quick reconnects are ignored. | Bluetooth settings |
@@ -142,6 +143,7 @@ New in 1.15, optional and off until you start it: see which apps on the TV conne
    - **What can be seen:** the server name comes from the start of each connection, which apps send openly: the TLS hello's server name (SNI) for HTTPS, the Host header for plain HTTP. Plain HTTP also shows its request line ("GET /path"), and plain DNS the name looked up.
    - **What can't:** HTTPS encrypts the path, the query and the data, and QUIC (HTTP/3, used by YouTube and Google) and Private DNS encrypt even the name. Showing those would mean decrypting the TV's traffic, which this monitor doesn't do.
 5. Use **Stop capture** (the same row), the notification's **Stop** action, or Android's VPN controls to restore normal routing (the TV's ADB connection drops for a moment when the VPN starts or stops, as the network changes). **Clear history** discards the in-memory list at any time; while capturing, it starts again from then. Starting/stopping a VPN can reconnect streams.
+6. **Sleep and Wi-Fi changes:** when the TV's Wi-Fi (or Ethernet) comes back as a new network, for example after a long sleep, the monitor rebuilds its VPN on it by itself, as switching capture off and on would. It takes about a second, and capture carries on. When the TV wakes on the same network, the monitor resets every connection that was open before it slept (their far ends are gone by then), so apps reconnect at once instead of waiting minutes on a dead one; this matters most for Private DNS, which on Android 10 would otherwise resolve nothing for up to about 10 minutes after waking.
 
 While any VPN is up (this monitor's or another), the home screen's System card shows a "VPN" badge in place of the network icon and "VPN · <network>" under the IP, which stays the TV's real address.
 
@@ -178,6 +180,19 @@ Press **Up** on the top bar and the home screen slides away. A screen with three
 - **USB debugging off:** the launcher can only use Android's background kill (`KILL_BACKGROUND_PROCESSES`). It can't stop apps that are on screen or running a service, and the screen says so. Memory isn't shown.
 - **Refresh:** the list is read when the screen opens and after each close. Nothing runs while the screen is closed.
 
+## Speed test
+
+**Settings → Speed test** (under Running apps) measures the TV's download speed and latency. It needs no USB debugging — it's plain HTTP from the launcher — and keeps the last 10 results so they can be compared.
+
+- **Test from:** pick the source in the row at the top:
+  - **Cloudflare** — the nearest Cloudflare edge (usually Kuala Lumpur); a good "internet" baseline.
+  - **Netflix** — fast.com's servers, which on a Malaysian line sit inside the ISP (a Netflix cache), so it reflects streaming.
+  - **Unifi Malaysia** — TM's own speedtest server, the nearest one picked automatically from Unifi's server list (over HTTPS), so the latency is tiny and it shows your line's local best.
+- **Run speed test:** a few quick latency round-trips, then a ~10-second download over a few connections. The speed climbs live as it runs; the latency is the quickest round-trip (shown below the Run row). If audio or video is playing when you start, it asks first (press OK again) rather than stutter it.
+- **History:** the last 10 runs, newest first, each as "93.1 Mbps · 5 ms" tagged with its source and the network it ran on (Wi-Fi name, or Ethernet) and how long ago. **Clear history** (press OK twice) empties the list.
+- On this TV's Unifi line, for example: Cloudflare ~52 ms, but the Unifi Klang server and Netflix cache answer in ~4–5 ms — the download speeds are all close to the line's capacity.
+- **No phone remote:** like Net traffic, the speed test is on the TV only.
+
 ## Settings (gear)
 
 **Quick actions:** hold OK (or press Menu) on the gear for a short menu under it:
@@ -199,7 +214,7 @@ The gear at the end of the top bar opens the launcher's Settings: categories on 
 | Category | Options |
 |---|---|
 | Home screen | Clock Auto / 12-hour / 24-hour, apps per row (5, 6 or 7: the dock and the app list), System card, Now Playing card (the Weather card is under Weather), wallpaper dim (Off/Low/Medium/High), wallpaper (Bing daily photo, seven built-in photos, your pictures or none), weather effects on/off (they work with the Weather card off too). A hidden card's column closes up. |
-| Prayer times | Prayer card on/off, zone (picker), azan on/off, reminder before prayer (Off / 5 / 10 / 15 / 30 min), play azan now |
+| Prayer times | Prayer card on/off, zone (Auto from the TV's location, or a picker), azan on/off, reminder before prayer (Off / 5 / 10 / 15 / 30 min), play azan now |
 | Weather | Weather card on/off, location (Auto or any of MET Malaysia's 440 places), air quality station (Nearest or any of the 68 APIMS stations) |
 | Most used | Most used card on/off, week starts on (Monday / Sunday), leave out (app picker) |
 | Screen saver | On/off, which one (OK cycles Prayer time, Live log, Globe and the TV's others), Start now (preview); with Globe chosen, a switch for each of its layers (clouds, wind and countries start off) |
@@ -207,8 +222,39 @@ The gear at the end of the top bar opens the launcher's Settings: categories on 
 | Notifications | TV Home updates, Play Store updates, new HDMI devices, Bluetooth, connection status, low memory (each on/off), low-memory level 80/85/90 % |
 | Info overlay | Show over apps on/off (off by default), what the left, centre and right show (network speed / uptime / clock / elapsed time / nothing), position (top / bottom), text size (small / medium / large), background on/off |
 | Phone remote | Remote on/off (the banner and bell keep working when it's off), its address, forget all paired phones (press OK twice), and each paired phone with when it was last used and its own Forget (OK twice) |
+| Button Mapper | The buttons with new actions, Add a button (press it), Add the Back button, long-press time (Short / Medium / Long), double-press time (Fast / Medium / Slow); see [Button Mapper](#button-mapper) |
 | Running apps | Apps hidden from the running-apps screen; OK shows one again |
-| About | Version, install time, APK size, Check for updates (shows the last check's answer, from here or the bell's 6-hourly check: "You have the latest version", or the row becomes "Update to x.y.z" to download and install it, settings kept), TV settings |
+| Speed test | Test from (Cloudflare / Netflix / Unifi Malaysia), Run speed test (download + latency, live while it runs), the last run's latency, and the last 10 results tagged with their source. See [Speed test](#speed-test) |
+| About | Version, install time, APK size, Check for updates (shows the last check's answer, from here or the bell's daily check: "You have the latest version", or the row becomes "Update to x.y.z" to download and install it, settings kept), TV settings |
+
+## Button Mapper
+
+<table>
+  <tr>
+    <td width="50%"><a href="button-mapper.jpg"><img src="button-mapper.jpg" width="100%" alt="Settings → Button Mapper: the Red (183) and Green (184) buttons with their actions, Add a button and timing"></a></td>
+    <td width="50%"><a href="button-mapper-button.jpg"><img src="button-mapper-button.jpg" width="100%" alt="The Red (183) button's page: single press opens an app, double and long press Normal, and Remove this button"></a></td>
+  </tr>
+</table>
+
+New in 1.16. **Settings → Button Mapper** gives the remote's buttons new actions, for a single press, a double press (two quick presses) or a long press (holding it). It works with USB debugging off.
+
+- **Add a button:** choose Add a button, then press the button on the remote. It's listed by name with its Android key code, e.g. "Red (183)". A button the TV keeps for itself, like Power, never arrives, so it can't be added. Back cancels, so Back has its own row, **Add the Back button**. The arrows and OK can't be added: they move around the TV.
+- **Actions:** Normal (what the button does), Nothing, Open an app (the list shows each app's icon), Home, Back, Recent apps, Android settings, Wi-Fi settings, Sound settings, App settings, TV Home settings, Power menu, Assistant, Inputs, Start the screen saver, Sleep, Quick menu, Take a screenshot (Android 9+, Android's own, saved where the TV keeps screenshots), Mute, Volume up, Volume down, Play / pause, Next track, Previous track, Info overlay on or off, Net traffic on or off.
+- **Only what the TV has:** a Settings page or the assistant that this TV doesn't have isn't listed (on the development Mi TV the assistant isn't; Take a screenshot needs Android 9).
+- **Normal:**
+  - A remapped button's presses are taken to tell single, double and long apart, so "Normal" has to be played back by TV Home. Without USB debugging, an app can do that only for some keys:
+    - Back, Home and Recent apps (the accessibility service);
+    - volume and media keys (Android's audio service);
+    - Input (TV Home's picker), Settings and Notifications.
+  - These buttons can have any press remapped and keep the others normal.
+  - Other buttons (Menu, colour keys, app buttons…) can have their single press remapped any time. They get a double or long press once their single press has an action too, and setting the single press back to Normal clears them.
+- **Timing:**
+  - A button with a double-press action waits a moment after one press (the double-press time) to see if a second comes. Buttons without one act at once.
+  - A long press fires after the long-press time, while the button is still held.
+  - A remapped button loses an app's own long press for that button.
+- **Fixing a mistake:** on the Button Mapper page every button works normally, so a mapping can always be changed there. The phone remote's Settings tab has **Reset all buttons**, which puts every button back to normal (it asks first).
+- **How:** TV Home's accessibility service (the phone remote's, already on) sees every key before apps do. It takes only the remapped buttons; every other key passes through untouched.
+- **Other remapping apps:** a button remapped both here and in another app (any app that catches keys through accessibility) does both. Remap each button in one place only.
 
 ## Weather
 
@@ -233,13 +279,13 @@ The band word sits beside the number; a long one that doesn't fit ends in "…".
 
 
 - **The two numbers use different scales.** Malaysia's API and the US AQI weigh PM2.5 differently, and the US scale is stricter, so the same air often reads higher there (e.g. API 74 Moderate, US AQI 144). The API is measured at the station; Copernicus is a forecast model for the same spot, a second opinion rather than a duplicate.
-- **Where:** Settings → Weather. **Location** is Auto by default: the prayer zone's town matched to MET's places, else its state's forecast (for islands, peaks and whole-state zones). Where one of the zone's areas is the town of its nearest APIMS station, that one comes first, so the forecast and the air readings are for the same place: KTN01 → Kota Bharu (not Bachok, the zone's first area), PRK02 → Ipoh, NGS03 → Seremban, SGR03 → Klang. **Air quality station** is Nearest by default: the APIMS station closest to the prayer zone's town (SGR03 → Klang). Both lists download when first opened.
+- **Where:** Settings → Weather. **Location** is Auto by default: with the prayer zone on Auto, the MET town nearest the TV (from the same location the zone is found from; MET lists its towns without coordinates, so TV Home carries a table of where they are, from OpenStreetMap, and asks nothing online). With no town within about 30 km, or a zone picked by hand, it's the prayer zone's town matched to MET's places, else its state's forecast (for islands, peaks and whole-state zones). There, where one of the zone's areas is the town of its nearest APIMS station, that one comes first, so the forecast and the air readings are for the same place: KTN01 → Kota Bharu (not Bachok, the zone's first area), PRK02 → Ipoh, NGS03 → Seremban, SGR03 → Klang. **Air quality station** is Nearest by default: the APIMS station closest to the TV (else to the prayer zone's town; SGR03 → Klang). Both lists download when first opened. The TV's location is kept only on the TV, rounded to about 100 m.
 - **The forecast text** is MET's own (in Malay), put into English: "Ribut petir di beberapa tempat" → Thunderstorms in places; a phrase it doesn't know yet shows as MET wrote it.
 - **Offline:** everything is kept in `files/weather/` and shown from there straight away. A reading over 3 hours old turns grey, and a part that has never loaded shows "–".
 - **APIMS has no published API:** the card reads the APIMS portal's own map service (`eqms.doe.gov.my/api3/publicmapproxy/…/CAQM_MCAQM_Current_Reading`). If the DOE changes it, the API part shows "–" until the launcher is updated; the rest keeps working.
 - **Weather effects** (Settings → Home screen, on by default): the home screen shows the weather as it is now, behind the cards, from ECMWF's weather code (fetched with the feels-like, every 15 min):
   - **Drizzle or fog:** a misty glass with fine droplets.
-  - **Rain:** drops land on the glass, more and bigger the heavier the rain, and some run down it, wiping a clear trail. Each drop shows the wallpaper behind it shrunk and upside down, as real water does.
+  - **Rain:** small drops land on the glass and stay, more of them the heavier the rain; the big ones run down it, wiping a clear trail and leaving a few droplets in it, and slide off the bottom, so no big drop hangs on the glass. Each drop shows the wallpaper behind it shrunk and upside down, as real water does.
   - **Thunderstorm** (or a MET thunderstorm warning in force): soft lightning flashes every 5–13 s, sometimes a double flash.
   - **Unhealthy air** (API over 100): a faint warm haze.
   - **It plays, then settles:** for 45 seconds after home comes back to the front, or the weather gets worse, then everything stops where it is and the screen is still, so a home screen left on uses no CPU for it. It runs at about 30 frames a second while it plays. When the rain stops, the glass clears over 2–3 seconds.

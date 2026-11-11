@@ -69,12 +69,15 @@ final class RemoteSettings {
         cats.put(category("Prayer times", "Card, zone and azan",
                 toggle(LauncherSettings.SHOW_PRAYER, "Prayer card", "Today's five prayer times on the home screen"),
                 row("zone", LauncherSettings.ZONE, "Zone", z != null ? z[0] + " · " + z[2] : "JAKIM e-solat zone")
-                        .put("value", zone),
+                        // "auto" with Auto (its text names the zone found), else the zone code
+                        .put("value", LauncherSettings.zoneAuto(ctx) ? LauncherSettings.ZONE_AUTO : zone)
+                        .put("text", LauncherSettings.zoneAuto(ctx) ? "Auto (" + zone + ")" : zone),
                 toggle(LauncherSettings.AZAN, "Azan", "Plays the azan and shows a banner at each prayer time, while the TV is on"),
                 choice(LauncherSettings.PRAYER_REMINDER, "Reminder before prayer",
                         "A banner over any app, without sound, while the TV is on",
                         new int[] {0, 5, 10, 15, 30}, new String[] {"Off", "5 min", "10 min", "15 min", "30 min"}),
-                row("action", LauncherSettings.AZAN_TEST, "Play azan now", "Hear it on the TV and check the volume")));
+                row("action", LauncherSettings.AZAN_TEST, "Play azan now", "Hear it on the TV and check the volume")
+                        .put("button", "Play").put("done", "Playing the azan on the TV")));
         cats.put(category("Weather", "Forecast and air quality",
                 toggle(LauncherSettings.SHOW_WEATHER, "Weather card",
                         "Today's forecast and air quality on the home screen")));
@@ -86,7 +89,7 @@ final class RemoteSettings {
                         "Not on the card, like Live TV (it's only the HDMI and antenna screen)")
                         .put("value", new JSONArray(LauncherSettings.usageExcludedPresent(ctx)))));
         cats.put(category("Notifications", "What the bell tells you",
-                toggle(LauncherSettings.ALERT_UPDATE, "TV Home updates", "Checked every 6 hours"),
+                toggle(LauncherSettings.ALERT_UPDATE, "TV Home updates", "Checked once a day"),
                 toggle(LauncherSettings.ALERT_PLAY, "Play Store updates", "Apps with an update waiting, checked every hour"),
                 toggle(LauncherSettings.ALERT_HDMI, "New HDMI devices", "A device that appears over HDMI-CEC"),
                 toggle(LauncherSettings.ALERT_BT, "Bluetooth devices", "Connecting or disconnecting (not the TV remote)"),
@@ -109,6 +112,19 @@ final class RemoteSettings {
                 choice(LauncherSettings.STATUS_SIZE, "Text size", "Tiny 10, Small 12, Medium 14, Large 18",
                         StatusOverlay.SIZE_VALUES, StatusOverlay.SIZE_NAMES),
                 toggle(LauncherSettings.STATUS_BG, "Background", "A dark see-through box behind the text")));
+        // Set up on the TV (press the button there); the phone can put them all back to normal,
+        // in case a remapping makes the TV hard to use.
+        int buttons = LauncherSettings.buttons(ctx).size();
+        cats.put(category("Button Mapper", "New actions for the remote's buttons",
+                row("action", LauncherSettings.BUTTONS, "Reset all buttons",
+                        buttons == 0 ? "None set up. Set them up in TV Home's Settings on the TV"
+                                : (buttons == 1 ? "1 button" : buttons + " buttons") + " with new actions: all back to normal")
+                        .put("button", "Reset").put("done", "Every button back to normal")
+                        .put("ask", "Put every remote button back to normal? Their new actions are removed.")));
+        cats.put(category("Misc", "Compatibility and accessibility",
+                toggle(AccessibilityKeeper.SETTING, "Keep accessibility enabled",
+                        "Restores TV Home if the TV disables it. Turn this off first to disable accessibility manually")
+                        .put("value", AccessibilityKeeper.enabled(ctx))));
         return new JSONObject().put("ok", true).put("categories", cats);
     }
 
@@ -124,6 +140,10 @@ final class RemoteSettings {
         switch (row.getString("type")) {
             case "toggle":
                 if (!(v instanceof Boolean)) return "Expected on or off.";
+                if (AccessibilityKeeper.SETTING.equals(key)) {
+                    return AccessibilityKeeper.setEnabled(ctx, (Boolean) v) ? null
+                            : "Needs WRITE_SECURE_SETTINGS from the setup script.";
+                }
                 LauncherSettings.setFlag(ctx, key, (Boolean) v);
                 return null;
             case "choice": {
@@ -139,6 +159,11 @@ final class RemoteSettings {
                 return "Not one of the choices.";
             }
             case "zone":
+                if (LauncherSettings.ZONE_AUTO.equals(v)) {
+                    LauncherSettings.setZone(ctx, LauncherSettings.ZONE_AUTO);
+                    LauncherSettings.detectZone(ctx);
+                    return null;
+                }
                 if (!(v instanceof String) || zoneEntry(ctx, (String) v) == null) return "Unknown zone.";
                 LauncherSettings.setZone(ctx, (String) v);
                 return null;
@@ -153,7 +178,8 @@ final class RemoteSettings {
                 return "That wallpaper isn't on the TV.";
             }
             case "action":
-                LauncherSettings.playAzanNow();
+                if (LauncherSettings.BUTTONS.equals(key)) LauncherSettings.resetButtons(ctx);
+                else LauncherSettings.playAzanNow();
                 return null;
             case "apps": {
                 if (!(v instanceof String)) return "No app given.";
@@ -177,7 +203,8 @@ final class RemoteSettings {
             String[] z = e.split("\\|", 3);
             if (z.length == 3) out.put(new JSONObject().put("state", z[0]).put("code", z[1]).put("area", z[2]));
         }
-        return new JSONObject().put("ok", true).put("current", LauncherSettings.zone(ctx)).put("zones", out);
+        return new JSONObject().put("ok", true).put("current", LauncherSettings.zone(ctx))
+                .put("auto", LauncherSettings.zoneAuto(ctx)).put("zones", out);
     }
 
     /** {state, code, areas} for a zone code, or null. */

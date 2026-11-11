@@ -48,7 +48,7 @@ The Globe screen saver (21 seconds, no sound): Settings → Screen saver → **S
   </tr>
   <tr>
     <td valign="top"><b>Running apps</b> (Up from the top bar): what's running, how much memory each app uses and what it's doing. OK force-closes; hold OK to hide an app from the list.</td>
-    <td valign="top"><b>Settings</b> (the gear): prayer zone (all 60 JAKIM zones), azan and prayer reminders, which cards show, 12/24-hour clock, wallpaper, the Most used week, apps per row, the screen saver, what the bell tells you, the phone remote, and more. Changes apply straight away.</td>
+    <td valign="top"><b>Settings</b> (the gear): prayer zone (found from the TV's location, or any of the 60 JAKIM zones), azan and prayer reminders, which cards show, 12/24-hour clock, wallpaper, the Most used week, apps per row, the screen saver, what the bell tells you, the phone remote, and more. Changes apply straight away.</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/dock-reorder.jpg" width="100%" alt="Hold OK on a dock app: Move, Remove from dock, Open"></td>
@@ -81,6 +81,14 @@ The Globe screen saver (21 seconds, no sound): Settings → Screen saver → **S
     <td colspan="2" valign="top"><b>Net traffic on the Globe</b>: each connection arcs from your prayer zone to its country, a glowing dot hopping along the newest ones; older routes fade in steps over 30 minutes. The Globe's <b>Internet connections</b> layer (Settings → Screen saver) turns them on or off.</td>
   </tr>
   <tr>
+    <td width="50%"><img src="docs/button-mapper.jpg" width="100%" alt="Settings → Button Mapper: the Red (183) and Green (184) buttons with their actions, Add a button and timing"></td>
+    <td width="50%"><img src="docs/button-mapper-actions.jpg" width="100%" alt="Actions for a press: Inputs, Start the screen saver, Sleep, Quick menu, Take a screenshot and more"></td>
+  </tr>
+  <tr>
+    <td valign="top"><b>Button Mapper</b> (new in 1.16): Settings → Button Mapper → <b>Add a button</b>, press it on the remote, and give it a new <b>single</b>, <b>double</b> or <b>long press</b>. Each button shows its Android key code, e.g. Red (183). On this page every button works normally, so a mistake is always easy to undo; the phone remote's Settings tab can reset them all.</td>
+    <td valign="top"><b>Actions</b>: open an app, Home, Back, Recent apps, Android / Wi-Fi / Sound / App settings, TV Home settings, the power menu, Inputs, the screen saver, sleep, the quick menu, a screenshot, mute, volume up/down, media keys, the info overlay or Net traffic. All work with USB debugging off. The arrows and OK can't be remapped, and a button whose own press Android can't replay (Menu, colour keys) gets a double or long press once its single press has an action.</td>
+  </tr>
+  <tr>
     <td colspan="2" align="center"><img src="docs/wallpapers.jpg" width="50%" alt="Wallpaper list"><br><b>Wallpapers</b>: move to preview, OK to set. Add your own from the phone remote: Settings → Wallpaper → Your photo.</td>
   </tr>
   <tr>
@@ -107,7 +115,8 @@ The Globe screen saver (21 seconds, no sound): Settings → Screen saver → **S
         <li><b>Connection status</b>: a banner over any app when Wi-Fi drops or loses internet.</li>
         <li><b>Info overlay</b> over apps (optional): network speed, uptime, a clock with seconds and time since you left the home screen; hidden on the home screen.</li>
         <li><b>Inputs</b> menu for HDMI 1–3, AV and Live TV.</li>
-        <li>Light: a 0.51 MB app that starts about 3× faster than the stock launcher, uses about a third less memory after navigating, and has a quarter of its janky frames (<a href="#benchmark">benchmark</a>).</li>
+        <li><b>Button Mapper</b>: give any remote button a new single, double or long press (open an app, the screen saver, sleep, the quick menu, mute, media keys and more), with USB debugging off.</li>
+        <li>Light: a 0.53 MB app that starts about twice as fast as the stock launcher, uses about a third less memory after navigating, and has a sixth of its janky frames (<a href="#benchmark">benchmark</a>).</li>
       </ul>
     </td>
   </tr>
@@ -151,6 +160,7 @@ You need an Android TV or Google TV running Android 8.0 or newer, and a computer
 | The gear | Settings: wallpaper, prayer zone, azan, cards, screen saver, notifications, phone remote |
 | Hold OK on the gear | Quick actions: start screen saver, sleep timer, sleep now, restart, shut down |
 | Settings → Net traffic | Start or stop the connection monitor; OK on a connection for its details |
+| Settings → Speed test | Download speed and latency from Cloudflare, Netflix or Unifi Malaysia, with the last 10 runs |
 | Back / Home | Back to the dock |
 
 **Phone remote:** open `http://<TV IP>:8486` in your phone's browser on the same Wi-Fi and pair with the PIN shown on the TV. Settings → Phone remote shows the exact address. Five tabs:
@@ -167,17 +177,17 @@ More: [how every feature works](docs/features.md).
 
 ## Benchmark
 
-Against the stock Android TV launcher on the Mi TV (2026-10-25, launcher 1.8). Method and notes: [development.md](docs/development.md#benchmark).
+Against the stock Android TV launcher on the Mi TV (2026-11-04, TV Home 1.16.0). Method and notes: [development.md](docs/development.md#benchmark).
 
-| | This launcher (1.8) | Stock Android TV launcher |
+| | TV Home 1.16.0 | Stock Android TV launcher |
 |---|---|---|
-| Memory, idle / after navigating (PSS) | 88 / **83 MB** | 87 / 122 MB |
-| CPU, idle, 60 s | 0.15 s | 0.11 s |
-| Cold start (process killed → first frame) | **0.51–0.57 s** | 1.49–1.59 s |
-| Back to home from an app (wait time) | 22–24 ms | 17–20 ms |
-| Janky frames while navigating | **5.8 % (33/567)** | 22.4 % (74/331) |
-| Frame time p50 / p90 / p99 | 7 / **8** / 61 ms | 5 / 22 / 40 ms |
-| APK size | **0.51 MB** | 12.7 MB |
+| Memory, idle / after navigating (PSS) | 87 / **115 MB** | 90 / 178 MB |
+| CPU, idle, 60 s | 0.18–0.27 s settled (0.71 s while the weather effects play) | 0.08 s |
+| Cold start (process killed → first frame) | **0.76–0.81 s** | 1.47–2.34 s |
+| Back to home from an app (wait time) | 18–20 ms | 15–17 ms |
+| Janky frames while navigating | **4.8 % (59/1240)** | 29.4 % (109/371) |
+| Frame time p50 / p90 / p99 | 9 / **12** / **38** ms | 7 / 28 / 150 ms |
+| APK size | **0.53 MB** | 12.7 MB |
 
 ## Security
 
@@ -185,6 +195,7 @@ This setup is meant for a TV on your own network, and it deliberately makes the 
 
 - **USB debugging stays on** (port 5555): anyone on your Wi-Fi can connect with `adb` and control the TV. The launcher uses the same loopback connection for the remote's D-pad and keyboard inside apps, screenshots, sleep/restart and disabling apps. Turn it off in Developer options when you don't need those — the rest of the phone remote keeps working.
 - **What the launcher is granted over ADB:** "draw over other apps" (the pairing PIN and messages over any app), an accessibility service (Back and Home from the phone remote, and the remote's Input button), `DUMP` (Now Playing without USB debugging), `WRITE_SECURE_SETTINGS` (choosing and switching the screen saver from TV Home's Settings), `READ_LOGS` below Android 13 (the Live log screen saver and Play Store updates in the bell; it can read the whole system log, which stays on the TV) and All files access (the Files tab and the `Wallpapers` folder). The accessibility service could see what's on screen, but doesn't ask to; it sends Back and Home, and filters one key, the Input button, letting every other key through untouched.
+- **Keep accessibility enabled (optional, off by default):** Settings → Misc can restore TV Home's accessibility service if firmware clears it, including while another app is open or after TV Home starts at boot. It uses the existing background service and `WRITE_SECURE_SETTINGS`, preserves other accessibility services and backs off during repeated resets. While enabled it also undoes a manual disable in Android Settings: **turn this option off in TV Home first**. Restore tools switch it off before removing access. Emergency opt-out: `adb shell settings put secure tvhome_keep_accessibility_enabled 0`. It cannot work while TV Home is force-stopped or the permission has been revoked.
 - **The Weather card fetches public data** while TV Home is open (and keeps it for offline use): MET Malaysia's forecast and warnings for the place set in Settings (data.gov.my), the DOE's APIMS readings, and ECMWF's feels-like temperature and Copernicus air quality for the chosen station's spot (Open-Meteo). Like the Globe, the requests carry nothing about you beyond the TV's address and the `TvHome/1.0` user agent.
 - **The Globe screen saver fetches public data while it's on screen** (and keeps it for offline use): NASA's Earth maps (once, from Wikimedia Commons), OpenStreetMap's edits, USGS's earthquakes, CelesTrak's satellite orbits, NOAA's aurora and wind, NASA's snow and ice, the cloud map, and Natural Earth's countries (once) with each country's flag from Flagpedia (the first time it pops up), each only if its layer is switched on. The requests carry nothing about you or the TV beyond what any web request does (its address and a `TvHome/1.0` user agent).
 - **Net traffic (optional, off until you start it) is a local VPN.** Android asks before it runs, and a "VPN" badge shows on the home screen while it does. It forwards the TV's traffic on the TV itself (no outside VPN server) and reads only each connection's first outgoing bytes, for the server's name (the TLS hello's SNI or HTTP Host), a plain-HTTP request line or a plain-DNS name. Nothing is decrypted or stored beyond a 30-minute, in-memory list. Countries come from an offline IP list downloaded once, so no address is sent to a lookup service. The first start downloads its small engine (checked against fingerprints in the APK) and the country data (about 30 MB).

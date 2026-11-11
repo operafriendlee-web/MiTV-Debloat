@@ -14,19 +14,41 @@ PKG=my.rafhan.app.tvhome
 DOCS="see docs/install-macos.md, docs/install-linux.md or docs/install-windows.md"
 die() { echo "Error: $*" >&2; exit 1; }
 
-# ---- the computer: adb, Java 17+, Android SDK
+# ---- the computer: adb, Java 17-21, Android SDK
 command -v adb >/dev/null || die "adb not found. Install Android platform-tools ($DOCS)."
-# A JAVA_HOME that points somewhere stale is ignored; macOS can find a JDK by itself.
-if [ ! -x "${JAVA_HOME:-/nonexistent}/bin/java" ] && [ ! -x "${JAVA_HOME:-/nonexistent}/bin/java.exe" ]; then
+# Gradle and the Android plugin support JDK 17-21. A newer one (for example Homebrew's 27) fails
+# in the plugin's jlink step, so a JAVA_HOME outside that range is replaced by one that works;
+# java on PATH is used when no JDK is installed at all.
+jdk_java() {
+  if [ -x "$1/bin/java" ]; then echo "$1/bin/java"
+  elif [ -x "$1/bin/java.exe" ]; then echo "$1/bin/java.exe"
+  fi
+}
+jdk_major() {
+  local bin; bin="$(jdk_java "$1")"
+  [ -n "$bin" ] && "$bin" -version 2>&1 | sed -nE '1s/.*version "([0-9]+).*/\1/p'
+}
+jdk_ok() {
+  local v; v="$(jdk_major "$1")"
+  [ -n "$v" ] && [ "$v" -ge 17 ] && [ "$v" -le 21 ]
+}
+if ! jdk_ok "${JAVA_HOME:-/nonexistent}"; then
   unset JAVA_HOME
-  if [ -x /usr/libexec/java_home ] && JH="$(/usr/libexec/java_home -v 17+ 2>/dev/null)"; then
-    export JAVA_HOME="$JH"
+  if [ -x /usr/libexec/java_home ]; then
+    for want in 21 17; do
+      if JH="$(/usr/libexec/java_home -v "$want" 2>/dev/null)" && jdk_ok "$JH"; then
+        export JAVA_HOME="$JH"; break
+      fi
+    done
   fi
 fi
-JAVA="java"; [ -n "${JAVA_HOME:-}" ] && JAVA="$JAVA_HOME/bin/java"
+JAVA="java"; [ -n "${JAVA_HOME:-}" ] && JAVA="$(jdk_java "$JAVA_HOME")"
 JV="$("$JAVA" -version 2>&1 | head -1 | sed -E 's/.*version "([0-9]+).*/\1/')" || true
 case "${JV:-}" in ''|*[!0-9]*) JV= ;; esac
-[ "${JV:-0}" -ge 17 ] 2>/dev/null || die "JDK 17 or newer is needed to build (found: ${JV:-none}). $DOCS"
+if [ "${JV:-0}" -lt 17 ] 2>/dev/null || [ "${JV:-0}" -gt 21 ] 2>/dev/null; then
+  die "JDK 17-21 is needed to build (found: ${JV:-none}). $DOCS"
+fi
+[ -n "${JAVA_HOME:-}" ] && echo "Using JDK $JV ($JAVA_HOME)"
 SDK_DIR="$(sed -n 's/^sdk\.dir=//p' launcher/local.properties 2>/dev/null || true)"
 SDK_DIR="${SDK_DIR:-${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}}"
 [ -n "$SDK_DIR" ] && [ -d "$SDK_DIR" ] || die "Android SDK not found: set ANDROID_HOME ($DOCS)."
@@ -40,6 +62,22 @@ case "$STATE" in
   *) die "can't reach the TV at $TV ($STATE). Check its IP, that USB/network debugging is on, and that both are on the same network." ;;
 esac
 echo "$TV" > .tv   # reached it: the next runs (and the other scripts) don't need TV=
+
+# Replacing a running launcher can take the TV's Wi-Fi/ADB link down for a few seconds. A network
+# TV stuck "offline" needs a fresh connection, not just another connect, so reconnect and retry
+# instead of letting the next step fail with "device offline".
+reconnect() {
+  case "$TV" in *:*) adb disconnect "$TV" >/dev/null 2>&1 || true; adb connect "$TV" >/dev/null 2>&1 || true ;; esac
+}
+wait_device() {
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(A get-state 2>/dev/null | tr -d '\r')" = device ] && return 0
+    reconnect
+    sleep 1
+  done
+  return 1
+}
 SDK="$(A shell getprop ro.build.version.sdk | tr -d '\r')"
 [ "${SDK:-0}" -ge 26 ] 2>/dev/null || die "the TV runs Android SDK ${SDK:-?}; this launcher needs Android 8.0 (SDK 26) or newer."
 
@@ -70,12 +108,7 @@ BEFORE="$(updated || true)"
 INSTALL="$(A shell pm install -r /data/local/tmp/tvhome.apk 2>&1 | tr -d '\r' || true)"
 # Replacing the running launcher can drop the TV's ADB connection for a moment (a VPN it was
 # running goes away and the network changes): reconnect before the remaining steps.
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  [ "$(A get-state 2>/dev/null | tr -d '\r')" = device ] && break
-  # A network TV stuck "offline" needs a fresh connection, not just another connect.
-  case "$TV" in *:*) adb disconnect "$TV" >/dev/null 2>&1 || true; adb connect "$TV" >/dev/null 2>&1 || true ;; esac
-  sleep 1
-done
+wait_device || true
 A shell rm -f /data/local/tmp/tvhome.apk || true
 # The connection can drop before pm's "Success" arrives: the package's new install time says it worked.
 case "$INSTALL" in *Success*) ;; *)
@@ -93,12 +126,16 @@ Or sign your builds with the project's release key (docs/development.md)." ;;
   *) die "the TV refused the install (above)." ;;
 esac
 
+# The install can still be settling: wait again before the steps below, so one dropped link
+# doesn't leave the run half-done (the install itself already succeeded at this point).
+wait_device || die "the TV's connection dropped after installing and did not come back. Run it again; the install itself succeeded."
+
 # The Net traffic monitor's native engine isn't in the APK (it keeps the APK small). A release
 # install downloads it from the GitHub release; a local build's engine is pushed here instead,
 # next to the app, where the app checks it against the fingerprints in this APK before using it.
 ENGINE=launcher/app/build/outputs/netengine/release
 if [ -d "$ENGINE" ]; then
-  ABI="$(A shell getprop ro.product.cpu.abi | tr -d '\r')"
+  ABI="$(A shell getprop ro.product.cpu.abi 2>/dev/null | tr -d '\r' || true)"
   DEST="/sdcard/Android/data/$PKG/files/netengine"
   if A shell mkdir -p "$DEST" 2>/dev/null; then
     for f in "$ENGINE"/netengine-"$ABI"-*.so; do
@@ -148,8 +185,10 @@ case "$CUR" in
   # Already on (an update): Android doesn't always reconnect a service whose app was just
   # replaced (the phone remote's Back/Home and the Input button go dead). Off and on again; the
   # others stay on throughout.
-  *"$SVC"*)
-    OTHERS="$(printf %s "$CUR" | tr ':' '\n' | grep -v "^$PKG/" | paste -sd: -)"
+  # Either spelling: Android rewrites the list in the short form ($PKG/.RemoteAccessibilityService)
+  # when it drops an uninstalled app's service.
+  *"$PKG/"*)
+    OTHERS="$(printf %s "$CUR" | tr ':' '\n' | grep -v "^$PKG/" | paste -sd: - || true)"
     if [ -n "$OTHERS" ]; then opt settings put secure enabled_accessibility_services "$OTHERS"
     else opt settings delete secure enabled_accessibility_services; fi
     sleep 1

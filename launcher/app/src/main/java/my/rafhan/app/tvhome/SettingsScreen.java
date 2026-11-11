@@ -11,6 +11,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.TextUtils;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
@@ -44,17 +45,20 @@ final class SettingsScreen {
     private static final int TOGGLE = 0, CHOICE = 1, PICKER = 2, ACTION = 3, INFO = 4, CHECK = 5;
 
     private static final int HOME = 0, PRAYER = 1, WEATHER = 2, USAGE = 3, SAVER = 4, NET = 5, ALERTS = 6, STATUS = 7,
-            REMOTE = 8, HIDDEN = 9; // About: 10
+            REMOTE = 8, BUTTONS = 9, HIDDEN = 10, SPEED = 11, MISC = 12; // About: 13
     private static final String[] CATS = {"Home screen", "Prayer times", "Weather", "Most used", "Screen saver",
-            "Net traffic", "Notifications", "Info overlay", "Phone remote", "Running apps", "About"};
+            "Net traffic", "Notifications", "Info overlay", "Phone remote", "Button Mapper", "Running apps",
+            "Speed test", "Misc", "About"};
     private static final String[] CAT_SUBS = {"Cards, clock and wallpaper", "Zone and card",
             "Forecast and air quality", "Your top apps this week", "What the TV shows when idle",
             "Where the TV's apps connect", "What the bell tells you",
-            "Speed, uptime and clock over apps", "Control the TV from your phone", "Apps hidden from the list",
-            "Version and TV settings"};
+            "Speed, uptime and clock over apps", "Control the TV from your phone",
+            "New actions for the remote's buttons", "Apps hidden from the list",
+            "Download speed and latency", "Compatibility and accessibility", "Version and TV settings"};
     private static final int[] CAT_ICONS = {R.drawable.ic_tv, R.drawable.ic_crescent, R.drawable.ic_storm,
             R.drawable.ic_chart, R.drawable.ic_screensaver, R.drawable.ic_signal, R.drawable.ic_bell,
-            R.drawable.ic_status_bar, R.drawable.ic_phone, R.drawable.ic_ram, R.drawable.ic_info};
+            R.drawable.ic_status_bar, R.drawable.ic_phone, R.drawable.ic_remote_buttons, R.drawable.ic_ram,
+            R.drawable.ic_speed, R.drawable.ic_settings, R.drawable.ic_info};
     /** Net traffic's connection list updates this often while it's on screen. */
     private static final long NET_REFRESH_MS = 3_000;
     private static final String LIVE_TV = "com.mediatek.wwtv.tvcenter";
@@ -91,6 +95,7 @@ final class SettingsScreen {
         String id;         // wallpaper list: what this row shows
         boolean thumbSlot; // wallpaper list: a small preview on the left
         Bitmap thumb;
+        android.graphics.drawable.Drawable icon; // an app's icon before the label (Button Mapper's app list)
         String heading;    // a separator above the row, with this small title (never focused)
         boolean busy;      // an action under way: a small spinner before its value
 
@@ -113,11 +118,32 @@ final class SettingsScreen {
 
     private int col, cat, row;
     private List<Row> rows = new ArrayList<>();
-    // A picker (zone list, app list) replaces the rows until Back.
+    // A picker (zone list, app list) replaces the rows until Back. A picker opened from a picker
+    // (Button Mapper: button → press → action → app) keeps the one under it here.
     private List<Row> picker;
     private String pickerTitle;
     private int pickerFrom;
+    private final java.util.ArrayDeque<Object[]> pickerStack = new java.util.ArrayDeque<>(); // {rows, title, from}
     private boolean confirmForget;
+    // Speed test (SpeedTest): the run in flight, its live speed/latency, the last error, the results.
+    private boolean confirmSpeed; // "something's playing" two-step confirm
+    private boolean confirmClear; // "clear history" two-step confirm
+    private SpeedTest speedTest;
+    private boolean speedRunning;
+    private double speedLiveMbps;
+    private int speedLivePing;    // -1 until the latency phase finishes
+    private String speedError;
+    private List<SpeedHistory.Result> speedResults;
+    // Button Mapper: waiting for "Press a button" (RemoteAccessibilityService.capture), and why
+    // the last button pressed couldn't be added.
+    private boolean capturing, shown;
+    private String captureNote;
+    private final Runnable captureTimeout = () -> {
+        RemoteAccessibilityService.capture(null);
+        capturing = false;
+        captureNote = "Nothing pressed: try again";
+        refreshRows();
+    };
     private String confirmPhone; // Phone remote: the phone whose Forget is waiting for a second OK
 
     SettingsScreen(Context ctx, FrameLayout root, Executor worker, Host host) {
@@ -236,12 +262,31 @@ final class SettingsScreen {
 
     /** Opened from the gear: categories, on the last category used. */
     void open() {
+        shown = true;
         col = 0;
         row = 0;
         picker = null;
+        pickerStack.clear();
         confirmForget = false;
         confirmPhone = null;
         render();
+    }
+
+    /** Settings closed (or left): Button Mapper works again, and stop waiting for a button. */
+    void hidden() {
+        shown = false;
+        RemoteAccessibilityService.editing = false;
+        if (capturing) {
+            main.removeCallbacks(captureTimeout);
+            RemoteAccessibilityService.capture(null);
+            capturing = false;
+        }
+        if (speedTest != null) { // a running test: let it go, don't keep saturating the line
+            speedTest.cancel();
+            speedTest = null;
+            speedRunning = false;
+        }
+        main.removeCallbacks(speedTick);
     }
 
     /** What the highlight frames. */
@@ -268,6 +313,8 @@ final class SettingsScreen {
     private void move(int d) {
         confirmForget = false;
         confirmPhone = null;
+        confirmSpeed = false;
+        confirmClear = false;
         if (col == 0) {
             int c = cat + d;
             if (c < 0 || c >= CATS.length) return;
@@ -353,6 +400,7 @@ final class SettingsScreen {
     }
 
     private void openPicker(String title, List<Row> items, int focus) {
+        if (picker != null) pickerStack.push(new Object[] {picker, pickerTitle, pickerFrom});
         pickerFrom = row;
         pickerTitle = title;
         picker = items;
@@ -360,8 +408,18 @@ final class SettingsScreen {
         render();
     }
 
+    @SuppressWarnings("unchecked")
     private void closePicker() {
         if (inWallpaperList()) host.previewWallpaper(null); // left without OK: back to the saved one
+        if (!pickerStack.isEmpty()) { // back to the picker under it, on the row it was opened from
+            Object[] under = pickerStack.pop();
+            row = pickerFrom;
+            picker = (List<Row>) under[0];
+            pickerTitle = (String) under[1];
+            pickerFrom = (Integer) under[2];
+            render();
+            return;
+        }
         picker = null;
         row = pickerFrom;
         rows = rowsFor(cat);
@@ -391,15 +449,7 @@ final class SettingsScreen {
         capture.action = () -> {
             if (TrafficMonitor.stopping) return; // already on its way
             if (TrafficMonitor.running || TrafficMonitor.preparing) {
-                TrafficMonitor.stopping = true;
-                // The STOP command, not stopService(): Android keeps a running VPN's service bound.
-                try {
-                    ctx.startService(new android.content.Intent(ctx, TrafficVpnService.class)
-                            .setAction(TrafficVpnService.STOP));
-                } catch (RuntimeException e) {
-                    TrafficMonitor.stopping = false;
-                    TrafficMonitor.status = "Couldn't stop it here: use Android's VPN settings";
-                }
+                TrafficMonitor.stop(ctx);
             } else {
                 host.startNetTraffic();
             }
@@ -423,7 +473,7 @@ final class SettingsScreen {
         how.heading = "About";
         out.add(how);
         Row know = new Row(INFO, "Good to know");
-        know.sub = "Uses the TV's one VPN slot. Starting or stopping may briefly reconnect a stream. First start downloads about 30 MB";
+        know.sub = "Uses the TV's one VPN slot. Starting or stopping may briefly reconnect a stream. First start downloads about 30 KB";
         out.add(know);
 
         Map<String, String> where = new HashMap<>();
@@ -555,6 +605,15 @@ final class SettingsScreen {
     };
     private String netShown = "";
 
+    /** While a speed test runs, the rows (the live number) refresh a couple of times a second. */
+    private final Runnable speedTick = new Runnable() {
+        @Override
+        public void run() {
+            if (cat != SPEED || picker != null || !rowList.isShown() || !speedRunning) return;
+            refreshRows(); // render() posts the next tick while speedRunning
+        }
+    };
+
     private static boolean netBusy() {
         return TrafficMonitor.preparing || TrafficMonitor.stopping;
     }
@@ -566,6 +625,129 @@ final class SettingsScreen {
         for (TrafficHistory.Entry x : e) bytes += x.sent + x.received;
         return TrafficMonitor.running + "|" + TrafficMonitor.preparing + "|" + TrafficMonitor.stopping + "|"
                 + TrafficMonitor.status + "|" + e.size() + "|" + bytes + "|" + TrafficMonitor.destinations.size();
+    }
+
+    // ---------------------------------------------------------------- Speed test
+
+    private static final int[] SPEED_SOURCES = {0, 1, 2};
+    private static final String[] SPEED_SOURCE_NAMES = {"Cloudflare", "Netflix", "Unifi Malaysia"};
+
+    /**
+     * Settings → Speed test (SpeedTest): a source to test from, a Run row with the live download
+     * speed, the last run's latency, and the last 10 results (SpeedHistory) to compare.
+     */
+    private void speedRows(List<Row> out) {
+        if (speedResults == null) speedResults = SpeedHistory.load(ctx);
+        SpeedHistory.Result last = speedResults.isEmpty() ? null : speedResults.get(0);
+
+        out.add(choice(LauncherSettings.SPEED_SOURCE, "Test from",
+                "Cloudflare (nearest edge), Netflix (streaming) or Unifi (TM's nearest server)", SPEED_SOURCES, SPEED_SOURCE_NAMES));
+
+        Row run = new Row(ACTION, speedRunning ? "Testing…" : "Run speed test");
+        if (speedRunning) {
+            if (speedLivePing < 0) {
+                run.sub = "Measuring latency…";
+                run.value = () -> "…";
+            } else {
+                run.sub = "Measuring download… leave this page to stop";
+                run.value = () -> speedLiveMbps <= 0 ? speedLivePing + " ms"
+                        : String.format(Locale.US, "%.1f Mbps", speedLiveMbps);
+            }
+        } else if (confirmSpeed) {
+            run.sub = "Something's playing — a test may stutter it. Press OK again to run anyway";
+            run.value = () -> "Run?";
+        } else {
+            run.sub = speedError != null ? speedError
+                    : last == null ? "Download speed and latency" : "Last run " + speedAgo(last.timeMs);
+            run.value = () -> last == null ? "" : String.format(Locale.US, "%.0f Mbps", last.downMbps);
+        }
+        run.action = this::runSpeedTest;
+        out.add(run);
+
+        if (!speedRunning && last != null) {
+            out.add(detail("Latency", last.pingMs + " ms", "Delay before video starts; lower is snappier"));
+        }
+
+        if (!speedResults.isEmpty()) {
+            for (int i = 0; i < speedResults.size(); i++) {
+                SpeedHistory.Result r = speedResults.get(i);
+                Row h = new Row(INFO, String.format(Locale.US, "%.1f Mbps · %d ms", r.downMbps, r.pingMs));
+                if (i == 0) h.heading = "History";
+                String net = r.ethernet ? "Ethernet" : r.netName.isEmpty() ? "Wi-Fi" : "Wi-Fi (" + r.netName + ")";
+                h.sub = (r.source.isEmpty() ? "" : r.source + " · ") + net + " · " + speedAgo(r.timeMs);
+                out.add(h);
+            }
+            Row clear = new Row(ACTION, confirmClear ? "Press OK again to clear history" : "Clear history");
+            clear.action = () -> {
+                if (!confirmClear) {
+                    confirmClear = true;
+                    refreshRows();
+                    return;
+                }
+                confirmClear = false;
+                speedResults.clear();
+                SpeedHistory.save(ctx, speedResults);
+                refreshRows();
+            };
+            out.add(clear);
+        }
+    }
+
+    private void runSpeedTest() {
+        if (speedRunning) return;
+        android.media.AudioManager am = ctx.getSystemService(android.media.AudioManager.class);
+        if (!confirmSpeed && am != null && am.isMusicActive()) { // radio, a video: warn before saturating
+            confirmSpeed = true;
+            refreshRows();
+            return;
+        }
+        confirmSpeed = false;
+        speedError = null;
+        speedRunning = true;
+        speedLiveMbps = 0;
+        speedLivePing = -1;
+        if (speedResults == null) speedResults = SpeedHistory.load(ctx);
+        refreshRows();
+        SpeedTest.Source src = SpeedTest.Source.of(LauncherSettings.choice(ctx, LauncherSettings.SPEED_SOURCE));
+        speedTest = new SpeedTest();
+        speedTest.start(src, new SpeedTest.Listener() {
+            @Override
+            public void onLatency(int ms) {
+                speedLivePing = ms;
+            }
+
+            @Override
+            public void onProgress(double m) {
+                speedLiveMbps = m; // the tick shows it
+            }
+
+            @Override
+            public void onResult(double down, int ping) {
+                speedRunning = false;
+                speedTest = null;
+                speedLiveMbps = down;
+                SysInfo.Net n = SysInfo.network(ctx);
+                SpeedHistory.add(speedResults, new SpeedHistory.Result(System.currentTimeMillis(), src.label, down, ping,
+                        n.ethernet, n.name), SpeedHistory.MAX);
+                SpeedHistory.save(ctx, speedResults);
+                refreshRows();
+            }
+
+            @Override
+            public void onError(String message) {
+                speedRunning = false;
+                speedTest = null;
+                speedError = message;
+                refreshRows();
+            }
+        });
+    }
+
+    private static String speedAgo(long timeMs) {
+        long d = System.currentTimeMillis() - timeMs;
+        if (d < 60_000) return "just now";
+        return android.text.format.DateUtils.getRelativeTimeSpanString(timeMs, System.currentTimeMillis(),
+                android.text.format.DateUtils.MINUTE_IN_MILLIS).toString();
     }
 
     private List<Row> rowsFor(int c) {
@@ -580,7 +762,10 @@ final class SettingsScreen {
             case ALERTS: alertRows(out); break;
             case STATUS: statusRows(out); break;
             case REMOTE: remoteRows(out); break;
+            case BUTTONS: buttonRows(out); break;
             case HIDDEN: hiddenRows(out); break;
+            case SPEED: speedRows(out); break;
+            case MISC: miscRows(out); break;
             default: aboutRows(out); break;
         }
         return out;
@@ -655,10 +840,11 @@ final class SettingsScreen {
     private void prayerRows(List<Row> out) {
         out.add(toggle(LauncherSettings.SHOW_PRAYER, "Prayer card", "Today's five prayer times on the home screen"));
         String zone = LauncherSettings.zone(ctx);
+        boolean auto = LauncherSettings.zoneAuto(ctx);
         String[] z = RemoteSettings.zoneEntry(ctx, zone);
         Row r = new Row(PICKER, "Zone");
         r.sub = z != null ? z[0] + " · " + z[2] : "JAKIM e-solat zone";
-        r.value = () -> zone;
+        r.value = () -> auto ? "Auto (" + zone + ")" : zone;
         r.action = this::openZonePicker;
         out.add(r);
         out.add(toggle(LauncherSettings.AZAN, "Azan", "Plays the azan and shows a banner at each prayer time, while the TV is on"));
@@ -671,7 +857,7 @@ final class SettingsScreen {
         out.add(test);
     }
 
-    /** The Weather card: on/off, the MET place (Auto: the prayer zone's town) and the APIMS station. */
+    /** The Weather card: on/off, the MET place (Auto: the town nearest the TV) and the APIMS station. */
     private void weatherRows(List<Row> out) {
         out.add(toggle(LauncherSettings.SHOW_WEATHER, "Weather card",
                 "Today's forecast and air quality on the home screen"));
@@ -680,7 +866,7 @@ final class SettingsScreen {
         boolean auto = LauncherSettings.weatherPlace(ctx).isEmpty();
         Row loc = new Row(PICKER, "Location");
         loc.sub = place != null ? "MET Malaysia's forecast for this " + place.type().toLowerCase(Locale.ROOT)
-                : "MET Malaysia's forecast. Auto: your prayer zone's town";
+                : "MET Malaysia's forecast. Auto: the town nearest your TV";
         loc.value = () -> place == null ? "Auto" : auto ? "Auto (" + place.name + ")" : place.name;
         loc.action = this::openPlacePicker;
         out.add(loc);
@@ -736,7 +922,7 @@ final class SettingsScreen {
     }
 
     private void alertRows(List<Row> out) {
-        out.add(toggle(LauncherSettings.ALERT_UPDATE, "TV Home updates", "Checked every 6 hours"));
+        out.add(toggle(LauncherSettings.ALERT_UPDATE, "TV Home updates", "Checked once a day"));
         out.add(toggle(LauncherSettings.ALERT_PLAY, "Play Store updates", "Apps with an update waiting, checked every hour"));
         out.add(toggle(LauncherSettings.ALERT_HDMI, "New HDMI devices", "A device that appears over HDMI-CEC"));
         out.add(toggle(LauncherSettings.ALERT_BT, "Bluetooth devices", "Connecting or disconnecting (not the TV remote)"));
@@ -814,6 +1000,261 @@ final class SettingsScreen {
         }
     }
 
+    // ---------------------------------------------------------------- Button Mapper
+
+    /**
+     * Settings → Button Mapper: the buttons given new actions (ButtonMap; done by
+     * RemoteAccessibilityService and ButtonActions), "Add a button" (press it), Back (which
+     * cancels adding, so it has its own row), and the long- and double-press times.
+     */
+    private void buttonRows(List<Row> out) {
+        boolean on = RemoteAccessibilityService.isOn();
+        if (!on) {
+            Row r = new Row(ACTION, "Turn on TV Home's accessibility service");
+            r.sub = "Button Mapper needs \"TV Home phone remote\" switched on in the TV's Settings → Accessibility";
+            r.action = this::openAccessibilitySettings;
+            out.add(r);
+        }
+        List<Integer> buttons = LauncherSettings.buttons(ctx);
+        for (int code : buttons) {
+            Row r = new Row(ACTION, buttonTitle(code));
+            r.sub = buttonSummary(code);
+            r.action = () -> openButton(code, 0);
+            out.add(r);
+        }
+        Row add = new Row(on ? ACTION : INFO, capturing ? "Press a button on the remote…" : "Add a button");
+        add.sub = capturing ? "Back cancels" : captureNote != null ? captureNote
+                : "Press it on the remote. Buttons the TV keeps for itself, like Power, can't be added";
+        add.value = () -> capturing ? "Waiting" : "";
+        add.action = this::startCapture;
+        out.add(add);
+        if (on && !buttons.contains(KeyEvent.KEYCODE_BACK)) {
+            Row back = new Row(ACTION, "Add the Back button");
+            back.sub = "Back cancels \"Add a button\", so it's added here";
+            back.action = () -> {
+                LauncherSettings.addButton(ctx, KeyEvent.KEYCODE_BACK);
+                openButton(KeyEvent.KEYCODE_BACK, 0);
+            };
+            out.add(back);
+        }
+        Row hold = choice(LauncherSettings.BUTTON_LONG_MS, "Long press", "How long to hold a button",
+                new int[] {400, 600, 900}, new String[] {"Short", "Medium", "Long"});
+        hold.heading = "Timing";
+        out.add(hold);
+        out.add(choice(LauncherSettings.BUTTON_DOUBLE_MS, "Double press",
+                "How quickly to press twice. A button with a double press waits this long after one press",
+                new int[] {250, 350, 500}, new String[] {"Fast", "Medium", "Slow"}));
+        Row note = new Row(INFO, "On this page every button works normally");
+        note.sub = "So a change can always be undone here. The arrows and OK can't be remapped. Works with USB debugging off";
+        out.add(note);
+    }
+
+    /** "Red (183)": the button's name and its Android key code. */
+    private static String buttonTitle(int code) {
+        return ButtonMap.keyName(code) + " (" + code + ")";
+    }
+
+    /** "Single: Open Netflix · Long: Sleep", or "Normal". */
+    private String buttonSummary(int code) {
+        StringBuilder sb = new StringBuilder();
+        String[] word = {"Single", "Double", "Long"};
+        for (int p = 0; p < ButtonMap.PRESS.length; p++) {
+            String a = LauncherSettings.buttonAction(ctx, code, p);
+            if (ButtonMap.DEFAULT.equals(a)) continue;
+            if (sb.length() > 0) sb.append("  ·  ");
+            sb.append(word[p]).append(": ").append(ButtonMap.name(a, this::appName));
+        }
+        return sb.length() > 0 ? sb.toString() : "Works normally";
+    }
+
+    private String appName(String pkg) {
+        return label(ctx.getPackageManager(), pkg);
+    }
+
+    private final java.util.Map<String, android.graphics.drawable.Drawable> appIcons = new java.util.HashMap<>();
+
+    /** An app's icon (kept for the next rebuild), or null if it isn't on the TV. Any thread. */
+    private android.graphics.drawable.Drawable appIcon(String pkg) {
+        synchronized (appIcons) {
+            android.graphics.drawable.Drawable d = appIcons.get(pkg);
+            if (d != null) return d;
+            try {
+                d = ctx.getPackageManager().getApplicationIcon(pkg);
+            } catch (PackageManager.NameNotFoundException e) {
+                return null;
+            }
+            appIcons.put(pkg, d);
+            return d;
+        }
+    }
+
+    private void openAccessibilitySettings() {
+        try {
+            ctx.startActivity(new android.content.Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException e) {
+            host.openTvSettings();
+        }
+    }
+
+    /** Explicit opt-in; switch this off here before disabling the service in Android Settings. */
+    private void miscRows(List<Row> out) {
+        Row keep = new Row(TOGGLE, "Keep accessibility enabled");
+        keep.sub = "Restore TV Home if the TV turns it off. Turn this off first to disable accessibility manually";
+        keep.on = () -> AccessibilityKeeper.enabled(ctx);
+        keep.action = () -> {
+            if (!AccessibilityKeeper.setEnabled(ctx, !AccessibilityKeeper.enabled(ctx))) {
+                android.widget.Toast.makeText(ctx, "Needs WRITE_SECURE_SETTINGS from the setup script",
+                        android.widget.Toast.LENGTH_LONG).show();
+            }
+            main.postDelayed(() -> {
+                if (shown && picker == null && cat == MISC) refreshRows();
+            }, 2_000);
+        };
+        out.add(keep);
+        Row state = new Row(INFO, "Accessibility service");
+        state.value = () -> AccessibilityKeeper.status(ctx);
+        out.add(state);
+    }
+
+    /** "Add a button": the next key pressed (RemoteAccessibilityService) is the one, for 10 s. */
+    private void startCapture() {
+        if (capturing || !RemoteAccessibilityService.isOn()) return;
+        capturing = true;
+        captureNote = null;
+        RemoteAccessibilityService.capture(code -> {
+            main.removeCallbacks(captureTimeout);
+            capturing = false;
+            captured(code);
+        });
+        main.postDelayed(captureTimeout, 10_000);
+    }
+
+    private void captured(int code) {
+        if (code == KeyEvent.KEYCODE_BACK) { // cancelled
+            refreshRows();
+            return;
+        }
+        if (!ButtonMap.remappable(code)) {
+            captureNote = ButtonMap.navigation(code) ? "The arrows and OK can't be remapped: they move around the TV"
+                    : "Android doesn't name that button, so it can't be remapped";
+            refreshRows();
+            return;
+        }
+        LauncherSettings.addButton(ctx, code);
+        if (col != 1 || cat != BUTTONS || picker != null) return; // left meanwhile: it's in the list
+        rows = rowsFor(cat);
+        row = rows.size() - 1;
+        for (int i = 0; i < rows.size(); i++) if (rows.get(i).label.equals(buttonTitle(code))) row = i;
+        openButton(code, 0);
+    }
+
+    /** A button's page: its single, double and long press, and Remove. */
+    private void openButton(int code, int focus) {
+        String single = LauncherSettings.buttonAction(ctx, code, ButtonMap.SINGLE);
+        String[] how = {"Press and let go", "Press twice quickly", "Hold it down"};
+        List<Row> items = new ArrayList<>();
+        for (int p = 0; p < ButtonMap.PRESS.length; p++) {
+            int press = p;
+            if (p != ButtonMap.SINGLE && !ButtonMap.extraPressAllowed(code, single)) {
+                Row r = new Row(INFO, ButtonMap.PRESS_NAMES[p]);
+                r.sub = "Give the single press an action first: TV Home can't play this button's own press back";
+                r.value = () -> "Normal";
+                items.add(r);
+                continue;
+            }
+            Row r = new Row(PICKER, ButtonMap.PRESS_NAMES[p]);
+            r.sub = how[p];
+            r.value = () -> ButtonMap.name(LauncherSettings.buttonAction(ctx, code, press), this::appName);
+            r.action = () -> openActions(code, press);
+            items.add(r);
+        }
+        Row remove = new Row(ACTION, "Remove this button");
+        remove.sub = "It works normally again";
+        remove.action = () -> {
+            LauncherSettings.removeButton(ctx, code);
+            closePicker();
+        };
+        items.add(remove);
+        openPicker(buttonTitle(code), items, focus);
+    }
+
+    /** What a press can do: CHECK rows, with "Open an app…" for a list of apps. */
+    private void openActions(int code, int press) {
+        String now = LauncherSettings.buttonAction(ctx, code, press);
+        String single = LauncherSettings.buttonAction(ctx, code, ButtonMap.SINGLE);
+        boolean extras = !ButtonMap.DEFAULT.equals(LauncherSettings.buttonAction(ctx, code, ButtonMap.DOUBLE))
+                || !ButtonMap.DEFAULT.equals(LauncherSettings.buttonAction(ctx, code, ButtonMap.LONG));
+        List<Row> items = new ArrayList<>();
+        int focus = 0;
+        for (String a : ButtonMap.ACTIONS) {
+            if (!ButtonMap.allowed(code, press, a, single)) continue;
+            if (!ButtonActions.available(ctx, a)) continue; // this TV can't (no such Settings page, Android 8)
+            Row r = new Row(CHECK, ButtonMap.name(a, this::appName));
+            if (ButtonMap.DEFAULT.equals(a)) {
+                r.sub = press == ButtonMap.SINGLE && extras && !ButtonMap.normalWithoutAdb(code)
+                        ? "What the button does. Also clears its double and long press" : "What the button does";
+            }
+            r.checked = a.equals(now);
+            if (r.checked) focus = items.size();
+            r.action = () -> chooseAction(code, press, a);
+            items.add(r);
+            if (ButtonMap.NONE.equals(a) || (ButtonMap.DEFAULT.equals(a) && !ButtonMap.allowed(code, press, ButtonMap.NONE, single))) {
+                boolean isApp = now.startsWith(ButtonMap.APP);
+                Row app = new Row(isApp ? PICKER : ACTION, "Open an app…");
+                app.value = () -> isApp ? appName(now.substring(ButtonMap.APP.length())) : "";
+                if (isApp) focus = items.size();
+                app.action = () -> openAppChoice(code, press, now);
+                items.add(app);
+            }
+        }
+        openPicker(ButtonMap.PRESS_NAMES[press], items, focus);
+    }
+
+    private void openAppChoice(int code, int press, String now) {
+        String title = "Open an app";
+        Row wait = new Row(INFO, "Loading…");
+        List<Row> loading = new ArrayList<>();
+        loading.add(wait);
+        openPicker(title, loading, 0);
+        worker.execute(() -> {
+            List<AppEntry> apps = AppRepository.load(ctx);
+            for (AppEntry a : apps) appIcon(a.pkg); // loaded here, off the screen's thread
+            main.post(() -> {
+                if (picker == null || !title.equals(pickerTitle)) return; // left meanwhile
+                List<Row> items = new ArrayList<>();
+                List<String> seen = new ArrayList<>();
+                for (AppEntry a : apps) {
+                    if (seen.contains(a.pkg) || a.pkg.equals(ctx.getPackageName())) continue;
+                    seen.add(a.pkg);
+                    Row r = new Row(CHECK, a.label);
+                    r.icon = appIcon(a.pkg);
+                    r.checked = now.equals(ButtonMap.APP + a.pkg);
+                    r.action = () -> chooseAction(code, press, ButtonMap.APP + a.pkg);
+                    items.add(r);
+                }
+                items.sort((x, y) -> x.label.compareToIgnoreCase(y.label));
+                int focus = 0;
+                for (int i = 0; i < items.size(); i++) if (items.get(i).checked) focus = i;
+                picker = items;
+                row = focus;
+                render();
+            });
+        });
+    }
+
+    /** Saves a press's action and goes back to the button's page, rebuilt. */
+    private void chooseAction(int code, int press, String action) {
+        LauncherSettings.setButtonAction(ctx, code, press, action);
+        if (press == ButtonMap.SINGLE && !ButtonMap.extraPressAllowed(code, action)) {
+            // Its own press can't be played back: no double or long press without a single-press action.
+            LauncherSettings.setButtonAction(ctx, code, ButtonMap.DOUBLE, ButtonMap.DEFAULT);
+            LauncherSettings.setButtonAction(ctx, code, ButtonMap.LONG, ButtonMap.DEFAULT);
+        }
+        while (picker != null) closePicker();
+        openButton(code, press);
+    }
+
     private void hiddenRows(List<Row> out) {
         PackageManager pm = ctx.getPackageManager();
         List<String> pkgs = new ArrayList<>(RunningApps.hidden(ctx));
@@ -852,11 +1293,12 @@ final class SettingsScreen {
     }
 
     // Settings → About → Check for updates: a check running from here (the result is UpdateCheck's,
-    // shared with the bell's 6-hourly check).
+    // shared with the bell's daily check).
     private boolean updChecking;
 
     /** Check for updates, showing the last check's answer; once one is found, the same row installs it. */
     private Row updateRow() {
+        UpdateCheck.load(ctx); // the saved answer, before the bell's first look after a restart
         UpdateCheck.Release found = UpdateCheck.lastFound();
         if (!updChecking && found != null) {
             Row u = new Row(ACTION, "Update to " + found.version);
@@ -905,13 +1347,24 @@ final class SettingsScreen {
 
     private void openZonePicker() {
         String zone = LauncherSettings.zone(ctx);
+        boolean auto = LauncherSettings.zoneAuto(ctx);
         List<Row> items = new ArrayList<>();
         int focus = 0;
+        // Auto first: the zone from the TV's location (ZoneDetect), looked for again when picked.
+        Row a = new Row(CHECK, "Auto (" + zone + ")");
+        a.sub = "From the TV's location";
+        a.checked = auto;
+        a.action = () -> {
+            LauncherSettings.setZone(ctx, LauncherSettings.ZONE_AUTO);
+            LauncherSettings.detectZone(ctx);
+            closePicker();
+        };
+        items.add(a);
         for (String e : ctx.getResources().getStringArray(R.array.prayer_zones)) {
             String[] z = e.split("\\|", 3); // state | code | areas
             Row r = new Row(CHECK, z[2]);
             r.sub = z[0] + " · " + z[1];
-            r.checked = z[1].equals(zone);
+            r.checked = !auto && z[1].equals(zone);
             if (r.checked) focus = items.size();
             r.action = () -> {
                 LauncherSettings.setZone(ctx, z[1]);
@@ -922,7 +1375,7 @@ final class SettingsScreen {
         openPicker("Zone", items, focus);
     }
 
-    /** Every MET forecast location, with Auto (the prayer zone's town) first. */
+    /** Every MET forecast location, with Auto (the town nearest the TV) first. */
     private void openPlacePicker() {
         if (WeatherPanel.places(ctx).isEmpty()) loadingPicker("Location", this::openPlacePicker);
         else preparing("Location", this::showPlaces);
@@ -935,7 +1388,8 @@ final class SettingsScreen {
         Weather.Place auto = WeatherPanel.autoPlace(ctx, places);
         List<Row> items = new ArrayList<>();
         Row a = new Row(CHECK, "Auto");
-        a.sub = "Your prayer zone's town" + (auto != null ? ": " + auto.name : "");
+        a.sub = (LauncherSettings.where(ctx) != null ? "The town nearest your TV" : "Your prayer zone's town")
+                + (auto != null ? ": " + auto.name : "");
         a.checked = chosen.isEmpty();
         a.action = () -> {
             LauncherSettings.setWeatherPlace(ctx, "");
@@ -957,7 +1411,7 @@ final class SettingsScreen {
         openPicker("Location", items, focus);
     }
 
-    /** Every APIMS station by state, with Nearest (to the prayer zone's town) first. */
+    /** Every APIMS station by state, with Nearest (to the TV, or the prayer zone's town) first. */
     private void openStationPicker() {
         if (WeatherPanel.stations(ctx).isEmpty()) loadingPicker("Air quality station", this::openStationPicker);
         else preparing("Air quality station", this::showStations);
@@ -969,7 +1423,8 @@ final class SettingsScreen {
         Weather.Station near = WeatherPanel.nearestStation(ctx, stations);
         List<Row> items = new ArrayList<>();
         Row n = new Row(CHECK, "Nearest");
-        n.sub = "Closest to your prayer zone's town" + (near != null ? ": " + near.place : "");
+        n.sub = (LauncherSettings.where(ctx) != null ? "Closest to your TV" : "Closest to your prayer zone's town")
+                + (near != null ? ": " + near.place : "");
         n.checked = chosen.isEmpty();
         n.action = () -> {
             LauncherSettings.setWeatherStation(ctx, "");
@@ -1243,12 +1698,16 @@ final class SettingsScreen {
     // ---------------------------------------------------------------- views
 
     private void render() {
+        // On Button Mapper every button works normally, so a remapping can always be undone here.
+        RemoteAccessibilityService.editing = shown && cat == BUTTONS;
         if (picker == null) rows = rowsFor(cat);
         main.removeCallbacks(netTick);
         if (cat == NET && picker == null) {
             netShown = netState();
             main.postDelayed(netTick, netBusy() ? 500 : NET_REFRESH_MS); // runs again from here
         }
+        main.removeCallbacks(speedTick);
+        if (cat == SPEED && picker == null && speedRunning) main.postDelayed(speedTick, 500); // live readout
         for (int i = 0; i < catViews.size(); i++) {
             // The open category stays marked while its rows have focus.
             catViews.get(i).setBackgroundResource(i == cat && col == 1 ? R.drawable.row_selected : 0);
@@ -1324,6 +1783,13 @@ final class SettingsScreen {
             v.addView(t, tl);
         }
 
+        if (r.icon != null) {
+            ImageView i = new ImageView(ctx);
+            i.setImageDrawable(r.icon);
+            LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(px(32), px(32));
+            il.setMarginEnd(px(14));
+            v.addView(i, il);
+        }
         LinearLayout texts = new LinearLayout(ctx);
         texts.setOrientation(LinearLayout.VERTICAL);
         TextView label = text(16, 500, TEXT);

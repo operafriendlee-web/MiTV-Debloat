@@ -108,8 +108,18 @@ public class MainActivity extends Activity {
     static final String ACTION_INPUTS = "my.rafhan.app.tvhome.action.INPUTS";
     /** The Net traffic monitor's notification: Settings, on Net traffic. */
     static final String ACTION_NET_TRAFFIC = "my.rafhan.app.tvhome.action.NET_TRAFFIC";
+    /** A remote button set to "Quick menu" (Settings → Button Mapper): home, with the quick menu open. */
+    static final String ACTION_QUICK_MENU = "my.rafhan.app.tvhome.action.QUICK_MENU";
+    /** A remote button set to "TV Home settings": home, with Settings open. */
+    static final String ACTION_SETTINGS = "my.rafhan.app.tvhome.action.SETTINGS";
+    /**
+     * A remote button mapped to Home, pressed while the launcher is already in front: return to the
+     * dock. The accessibility GLOBAL_ACTION_HOME doesn't, because it cycles the activity through
+     * onStop, so onNewIntent's "already home" reset is guarded out by hiddenSinceResume.
+     */
+    static final String ACTION_GO_HOME = "my.rafhan.app.tvhome.action.GO_HOME";
     private static final int REQUEST_VPN = 72;
-    private boolean wantInputs, wantNetTraffic;
+    private boolean wantInputs, wantNetTraffic, wantQuickMenu, wantSettings;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final Map<String, AppEntry> rendered = new HashMap<>();
     private final List<ImageView> dockTiles = new ArrayList<>();
@@ -202,6 +212,10 @@ public class MainActivity extends Activity {
     // focus: the screensaver (a daydream window) covers home without pausing it.
     private boolean live;
     private boolean appsLoaded;
+    // The dock band starts hidden (XML) and is revealed with an expand once its icons are drawn:
+    // at a cold boot the package list and tile renderer arrive after the first frame, and a strip
+    // of empty tiles looks broken.
+    private boolean dockShown;
     private boolean tilesDropped;
     private long wallpaperStamp = -1;
     private boolean wallpaperFetching;
@@ -263,10 +277,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        LauncherSettings.initializeDeviceDefaults(this);
         setContentView(R.layout.activity_main);
         dp = getResources().getDisplayMetrics().density;
         wantInputs = ACTION_INPUTS.equals(getIntent().getAction());
         wantNetTraffic = ACTION_NET_TRAFFIC.equals(getIntent().getAction());
+        wantQuickMenu = ACTION_QUICK_MENU.equals(getIntent().getAction());
+        wantSettings = ACTION_SETTINGS.equals(getIntent().getAction());
         // After an update Android sometimes leaves the accessibility service unconnected.
         RemoteAccessibilityService.checkSoon(this);
         screenW = getResources().getDisplayMetrics().widthPixels;
@@ -377,7 +394,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
 
             @Override
             public void openTvSettings() {
-                startSafely(new Intent(Settings.ACTION_SETTINGS));
+                startSafely(ProjectorSupport.settings(MainActivity.this));
             }
 
             @Override
@@ -415,6 +432,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             }
         });
         LauncherSettings.addListener(settingsChanged);
+        LauncherSettings.detectZone(this); // the prayer zone's Auto: the TV's zone from its location
         applyCardSettings();
         loadApps(); // restores focus when the list arrives
         startForegroundService(new Intent(this, RemoteService.class));
@@ -604,6 +622,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
 
     @SuppressLint("NotifyDataSetChanged") // the whole list is new: re-read and re-sorted
     private void applyApps(List<AppEntry> all, List<String> dockPkgs, UsageScores.Scores scores) {
+        boolean firstLoad = !appsLoaded;
         String focusedPkg = focusedPackage();
         Map<String, AppEntry> byPkg = new HashMap<>();
         for (AppEntry e : all) byPkg.put(e.pkg, e);
@@ -644,7 +663,13 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             tile.setImageBitmap(e.tile);
             dockTiles.add(tile);
         }
-        findViewById(R.id.dockBand).setVisibility(dock.isEmpty() ? View.INVISIBLE : View.VISIBLE);
+        View band = findViewById(R.id.dockBand);
+        if (dock.isEmpty()) {
+            dockShown = false;
+            band.setVisibility(View.INVISIBLE);
+        } else if (!dockShown && dockTilesReady()) {
+            revealDock(firstLoad); // cached icons: no need to wait for a render
+        }
         adapter.notifyDataSetChanged();
 
         // Keep focus on the same app across reloads (installs, updates).
@@ -728,9 +753,59 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         if (d >= 0) {
             dockTiles.get(d).setImageBitmap(e.tile);
             if (d == dockIdx) setGlow(e.glow, true);
+            if (!dockShown && dockTilesReady()) revealDock(true);
         }
         int g = apps.indexOf(e);
         if (g >= 0) adapter.notifyItemChanged(g, PAYLOAD_TILE);
+    }
+
+    /** True once every dock app has a drawn tile, so the band would never show an empty slot. */
+    private boolean dockTilesReady() {
+        if (dock.isEmpty()) return false;
+        for (AppEntry e : dock) if (e.tile == null) return false;
+        return true;
+    }
+
+    /**
+     * Shows the dock only once its icons are ready, expanding it in. On a cold boot the first
+     * frame lands before PackageManager and the tile renderer finish; reloads (installs, dock
+     * edits) are already drawn, so they appear at once.
+     */
+    private void revealDock(boolean animate) {
+        if (dock.isEmpty()) return;
+        View band = findViewById(R.id.dockBand);
+        band.animate().cancel();
+        if (dockShown) {
+            band.setVisibility(View.VISIBLE);
+            return;
+        }
+        dockShown = true;
+        band.setVisibility(View.VISIBLE);
+        updateHighlight(true); // frames the dock now that its tiles have their final size
+        if (!animate) {
+            band.setAlpha(1f);
+            band.setScaleX(1f);
+            band.setScaleY(1f);
+            highlight.setAlpha(1f);
+            updateHero(false);
+            return;
+        }
+        // The focus ring is drawn at the dock's final size: hide it while the tiles expand, then
+        // fade it in, rather than leaving it floating over a smaller dock.
+        boolean ring = section == DOCK;
+        if (ring) {
+            highlight.animate().cancel();
+            highlight.setAlpha(0f);
+        }
+        band.setAlpha(0f);
+        band.setScaleX(0.78f);
+        band.setScaleY(0.78f);
+        band.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(240)
+                .setInterpolator(new DecelerateInterpolator(1.6f))
+                .withEndAction(() -> {
+                    if (ring) highlight.animate().alpha(1f).setDuration(160).start();
+                }).start();
+        updateHero(true);
     }
 
     private static int indexOf(List<AppEntry> list, String pkg) {
@@ -829,6 +904,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 settingsPage.setVisibility(View.VISIBLE);
                 settingsPage.animate().alpha(1f).setDuration(220).start();
             } else {
+                settingsScreen.hidden(); // Button Mapper works again
                 settingsPage.animate().alpha(0f).setDuration(180)
                         .withEndAction(() -> settingsPage.setVisibility(View.GONE)).start();
                 if (wallpaperPreview != null) { // left Settings mid-preview (Home): saved one back
@@ -985,7 +1061,8 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 radius = v.getHeight() * scale / 2f;
                 break;
             case DOCK:
-                if (dockIdx < dockTiles.size()) v = dockTiles.get(dockIdx);
+                // Hidden until its icons are drawn: no ring around an empty, invisible band.
+                if (dockShown && dockIdx < dockTiles.size()) v = dockTiles.get(dockIdx);
                 scale = TILE_SCALE;
                 radius *= scale;
                 break;
@@ -1011,6 +1088,10 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 break;
         }
         // Nothing to frame while the running-apps list is empty or loading.
+        if (!dockShown && section == DOCK) {
+            highlight.setVisibility(View.INVISIBLE);
+            return;
+        }
         highlight.setVisibility((section == UP || section == SETTINGS) && v == null ? View.INVISIBLE : View.VISIBLE);
         if (v == null || v.getWidth() == 0) return;
         // Frame the highlight rides with: the menu (fixed), the grid (page slide + list scroll),
@@ -1033,7 +1114,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     }
 
     private void updateHero(boolean animate) {
-        boolean show = section == DOCK && !dock.isEmpty();
+        boolean show = dockShown && section == DOCK && !dock.isEmpty();
         if (dockIdx < dock.size()) {
             AppEntry e = dock.get(dockIdx);
             if (editMode == EDIT_MOVE) hero.setText("Move " + e.label + "  ◀ ▶   ·   OK to place");
@@ -1532,18 +1613,14 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         boolean wasOff = !ScreenSaver.enabled(ctx);
         if (!wasOff || ScreenSaver.canSet(ctx)) {
             if (wasOff) ScreenSaver.setEnabled(ctx, true);
-            try {
-                startActivity(new Intent(Intent.ACTION_MAIN)
-                        .setClassName("com.android.systemui", "com.android.systemui.Somnambulator")
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            if (ScreenSaver.startSystem(ctx)) {
                 // Switching them off again ends a running screen saver, so that waits until the
                 // preview is over and the launcher is back in front (onWindowFocusChanged).
                 if (wasOff) previewStartedAt = SystemClock.uptimeMillis();
                 return;
-            } catch (ActivityNotFoundException | SecurityException e) {
-                // Google TV has no such screen: TV Home shows its own screen savers itself.
-                if (wasOff) ScreenSaver.setEnabled(ctx, false);
             }
+            // Google TV has no such screen: TV Home shows its own screen savers itself.
+            if (wasOff) ScreenSaver.setEnabled(ctx, false);
         }
         Intent own = SaverActivity.intent(ctx, chosen);
         if (own != null) {
@@ -1652,14 +1729,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     }
 
     private void startNetCapture() {
-        TrafficMonitor.preparing = true; // the spinner shows now, not when the service gets going
-        TrafficMonitor.status = "Starting…";
-        try {
-            startForegroundService(new Intent(this, TrafficVpnService.class));
-        } catch (RuntimeException e) {
-            TrafficMonitor.preparing = false;
-            TrafficMonitor.status = "The monitor couldn't start: " + e.getClass().getSimpleName();
-        }
+        TrafficMonitor.start(this);
         settingsScreen.refreshRows();
     }
 
@@ -1674,6 +1744,7 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             case LauncherSettings.ZONE:
                 prayer.setZone(LauncherSettings.zone(this));
                 weather.settingsChanged(); // Auto place and Nearest station follow the zone
+                if (section == SETTINGS) settingsScreen.refreshRows(); // "Auto (…)" once it's found
                 break;
             case LauncherSettings.WEATHER_PLACE:
             case LauncherSettings.WEATHER_STATION:
@@ -1683,12 +1754,19 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
                 updateClock(); // also re-renders the prayer times
                 break;
             case LauncherSettings.SHOW_PRAYER:
+            case LauncherSettings.AZAN:
+            case LauncherSettings.PRAYER_REMINDER:
+                LauncherSettings.detectZone(this);
+                prayer.refresh();
+                applyCardSettings();
+                break;
             case LauncherSettings.SHOW_USAGE:
             case LauncherSettings.SHOW_SYSTEM:
             case LauncherSettings.SHOW_NOW:
                 applyCardSettings();
                 break;
             case LauncherSettings.SHOW_WEATHER:
+                LauncherSettings.detectZone(this);
                 applyCardSettings();
                 weather.settingsChanged(); // back on: show and fetch now, not at the next minute
                 break;
@@ -1851,6 +1929,8 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     }
 
     private int netShown = -1;
+
+    private int netIconShown;
     // Network callbacks fire while Android still reports the old network (e.g. onLost before the
     // active network is cleared), so look again shortly after the last one.
     private final Runnable netRecheck = this::updateNetwork;
@@ -1859,8 +1939,14 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
     /** Wi-Fi button: icon and colour show connected / no internet / disconnected. */
     private void updateNetwork() {
         NetState st = NetState.read(this);
-        if (st.icon() * 4 + st.state != netShown) {
-            netShown = st.icon() * 4 + st.state;
+        // Auto zone not found yet (a boot can start before the network): look again once online.
+        if (st.state == NetState.CONNECTED && netShown != NetState.CONNECTED
+                && LauncherSettings.zoneAuto(this) && !LauncherSettings.zoneFound(this)) {
+            LauncherSettings.detectZone(this);
+        }
+        if (st.state != netShown || st.icon() != netIconShown) { // Wi-Fi ↔ Ethernet changes the icon only
+            netShown = st.state;
+            netIconShown = st.icon();
             ImageView wifi = (ImageView) pills[PILL_WIFI];
             wifi.setImageResource(st.icon());
             wifi.setImageTintList(android.content.res.ColorStateList.valueOf(st.color()));
@@ -1991,6 +2077,23 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
             wantInputs = false;
             main.postDelayed(this::openMenu, 400);
         }
+        if (wantQuickMenu) {
+            wantQuickMenu = false;
+            main.postDelayed(() -> {
+                if (section == MENU) closeMenu();
+                if (section == SETTINGS || section == UP) moveFocus(TOP, PILL_SETTINGS);
+                openQuickMenu();
+            }, 400);
+        }
+        if (wantSettings) {
+            wantSettings = false;
+            main.postDelayed(() -> {
+                if (section == MENU) closeMenu();
+                if (section == SETTINGS) return; // already open
+                settingsScreen.open();
+                moveFocus(SETTINGS, 0);
+            }, 400);
+        }
         if (wantNetTraffic) {
             wantNetTraffic = false;
             main.postDelayed(() -> {
@@ -2100,6 +2203,23 @@ hero.setGravity(android.view.Gravity.START | android.view.Gravity.CENTER_VERTICA
         }
         if (ACTION_NET_TRAFFIC.equals(intent.getAction())) {
             wantNetTraffic = true;
+            return;
+        }
+        if (ACTION_QUICK_MENU.equals(intent.getAction())) {
+            wantQuickMenu = true;
+            return;
+        }
+        if (ACTION_SETTINGS.equals(intent.getAction())) {
+            wantSettings = true;
+            return;
+        }
+        // A Home-mapped button pressed while the launcher is in front (isHome() is true, so it's
+        // resumed): go back to the dock unconditionally, the way the real Home key does.
+        if (ACTION_GO_HOME.equals(intent.getAction())) {
+            if (editMode != EDIT_NONE) return; // finish (OK) or cancel (Back) an edit first
+            if (section == MENU) closeMenu();
+            if (!dock.isEmpty()) moveFocus(DOCK, dockIdx);
+            else moveFocus(TOP, topIdx);
             return;
         }
         // Home pressed while already home: close the menu and go back to the dock.

@@ -9,6 +9,7 @@ import android.text.format.DateFormat;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -24,6 +25,7 @@ final class LauncherSettings {
             USAGE_EXCLUDED = "usage_excluded", WALL_DIM = "wallpaper_dim",
             ALERT_UPDATE = "alert_update", ALERT_PLAY = "alert_play", ALERT_HDMI = "alert_hdmi", ALERT_BT = "alert_bluetooth",
             ALERT_MEMORY = "alert_memory", MEMORY_LEVEL = "memory_level", NET_BANNER = "net_banner",
+            SPEED_SOURCE = "speed_source", // Speed test: 0 Cloudflare, 1 Unifi Malaysia, 2 Netflix
             REMOTE = "remote_on", WALLPAPER = "wallpaper", WEEK_START = "week_start",
             AZAN = "azan", AZAN_TEST = "azan_test",
             PRAYER_REMINDER = "prayer_reminder",
@@ -41,6 +43,12 @@ final class LauncherSettings {
             GLOBE_HUBBLE = "globe_hubble", GLOBE_LEGEND = "globe_legend", GLOBE_WIND = "globe_wind",
             GLOBE_GLINT = "globe_glint", GLOBE_RIM = "globe_rim", GLOBE_SKY = "globe_sky",
             GLOBE_COUNTRIES = "globe_countries", GLOBE_TRAFFIC = "globe_traffic";
+    /**
+     * Settings → Button Mapper (ButtonMap): the buttons added (a set of keycodes), each press's
+     * action under ButtonMap.key(code, press), and the long-press and double-press times (ms).
+     * Every key starts with "btn_", which listeners match on.
+     */
+    static final String BUTTONS = "btn_keys", BUTTON_LONG_MS = "btn_long_ms", BUTTON_DOUBLE_MS = "btn_double_ms";
     /** How the Globe turns on its own (a choice): SPIN_TWO_MINUTES or SPIN_REAL_TIME. */
     static final String GLOBE_SPIN = "globe_spin";
     static final int SPIN_TWO_MINUTES = 0, SPIN_REAL_TIME = 1;
@@ -72,6 +80,19 @@ final class LauncherSettings {
 
     private static SharedPreferences prefs(Context ctx) {
         return ctx.getSharedPreferences("settings", Context.MODE_PRIVATE);
+    }
+
+    /** Fresh 1 GB H713 projector installs start small. Never overwrite an existing user's choices. */
+    static void initializeDeviceDefaults(Context ctx) {
+        SharedPreferences p = prefs(ctx);
+        if (!p.getAll().isEmpty() || !ProjectorSupport.minimalDefaults(ctx)) return;
+        SharedPreferences.Editor edit = p.edit();
+        for (String key : new String[] {SHOW_PRAYER, SHOW_USAGE, SHOW_SYSTEM, SHOW_NOW,
+                SHOW_WEATHER, WEATHER_FX, REMOTE, AZAN, NET_BANNER, STATUS_BAR,
+                ALERT_UPDATE, ALERT_PLAY, ALERT_HDMI, ALERT_BT, ALERT_MEMORY}) {
+            edit.putBoolean(key, false);
+        }
+        edit.putInt(PRAYER_REMINDER, 0).putString(WALLPAPER, Wallpapers.NONE).apply();
     }
 
     /** Not a stored setting: tells listeners (the azan in RemoteService) to play once now. */
@@ -126,22 +147,89 @@ final class LauncherSettings {
             case STATUS_RIGHT: return SLOT_CLOCK;
             case STATUS_SIZE: return 12;  // sp: Small
             case APPS_PER_ROW: return 5;  // the dock and each app-list row
+            case BUTTON_LONG_MS: return 600;
+            case BUTTON_DOUBLE_MS: return 350;
             default: return 0;
         }
     }
 
     // ---------------------------------------------------------------- typed helpers
 
+    /** The zone setting's "Auto" (also what a fresh install has): the zone found from the TV's location. */
+    static final String ZONE_AUTO = "auto";
+    private static final String ZONE_FOUND = "prayer_zone_found", WHERE = "prayer_zone_where";
+
+    /**
+     * The prayer zone in use: the one chosen, or with Auto the one found from the TV's location
+     * (ZoneDetect), and until one's found the default (SGR03).
+     */
     static String zone(Context ctx) {
-        return prefs(ctx).getString(ZONE, ctx.getString(R.string.prayer_zone));
+        String z = prefs(ctx).getString(ZONE, ZONE_AUTO);
+        if (!ZONE_AUTO.equals(z)) return z;
+        return prefs(ctx).getString(ZONE_FOUND, ctx.getString(R.string.prayer_zone));
     }
 
+    /** Auto has found the TV's zone (it may not have yet: no location, or no network so far). */
+    static boolean zoneFound(Context ctx) {
+        return prefs(ctx).contains(ZONE_FOUND);
+    }
+
+    /** Auto: never chosen, or Auto picked. */
+    static boolean zoneAuto(Context ctx) {
+        return ZONE_AUTO.equals(prefs(ctx).getString(ZONE, ZONE_AUTO));
+    }
+
+    /** A zone code, or ZONE_AUTO. */
     static void setZone(Context ctx, String zone) {
         prefs(ctx).edit().putString(ZONE, zone).apply();
         changed(ZONE);
     }
 
-    /** The MET forecast place's id ("Tn181"), or "" for Auto: the prayer zone's town. */
+    /** What Auto found (null: nothing yet). Listeners hear ZONE when it changes the zone in use. */
+    static void setZoneFound(Context ctx, String zone) {
+        String before = zone(ctx);
+        if (zone == null) prefs(ctx).edit().remove(ZONE_FOUND).apply();
+        else prefs(ctx).edit().putString(ZONE_FOUND, zone).apply();
+        if (!before.equals(zone(ctx))) changed(ZONE);
+    }
+
+    /**
+     * Where the TV is ({latitude, longitude}, to about 100 m), as Auto last found it; null when the
+     * zone was picked by hand or nothing's found yet. The weather's Auto place and Nearest station
+     * use it, else the prayer zone's town. Kept only on the TV.
+     */
+    static double[] where(Context ctx) {
+        if (!zoneAuto(ctx)) return null;
+        String[] p = prefs(ctx).getString(WHERE, "").split(",");
+        if (p.length != 2) return null;
+        try {
+            return new double[] {Double.parseDouble(p[0]), Double.parseDouble(p[1])};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** With Auto, looks for the TV's zone (from its location) and keeps it and where the TV is. */
+    static void detectZone(Context ctx) {
+        // With no prayer/weather features in use, don't request a location in the background.
+        if (!flag(ctx, SHOW_PRAYER) && !flag(ctx, SHOW_WEATHER) && !flag(ctx, AZAN)
+                && choice(ctx, PRAYER_REMINDER) == 0) return;
+        if (!zoneAuto(ctx)) return;
+        Context app = ctx.getApplicationContext();
+        ZoneDetect.locate(app, here -> {
+            if (here == null || !zoneAuto(app)) return;
+            String found = ZoneDetect.nearest(here[0], here[1]);
+            if (found == null) return; // outside Malaysia: keep what was found before
+            String at = String.format(Locale.ROOT, "%.3f,%.3f", here[0], here[1]);
+            boolean moved = !at.equals(prefs(app).getString(WHERE, ""));
+            prefs(app).edit().putString(WHERE, at).apply();
+            String before = zone(app);
+            setZoneFound(app, found);
+            if (moved && before.equals(zone(app))) changed(WEATHER_PLACE); // same zone, new spot: the weather's Auto
+        });
+    }
+
+    /** The MET forecast place's id ("Tn181"), or "" for Auto: the town nearest the TV (else the prayer zone's). */
     static String weatherPlace(Context ctx) {
         return prefs(ctx).getString(WEATHER_PLACE, "");
     }
@@ -151,7 +239,7 @@ final class LauncherSettings {
         changed(WEATHER_PLACE);
     }
 
-    /** The APIMS station's id ("CA21B"), or "" for Nearest: the one closest to the prayer zone. */
+    /** The APIMS station's id ("CA21B"), or "" for Nearest: the one closest to the TV (else the prayer zone). */
     static String weatherStation(Context ctx) {
         return prefs(ctx).getString(WEATHER_STATION, "");
     }
@@ -214,5 +302,60 @@ final class LauncherSettings {
         else s.remove(pkg);
         prefs(ctx).edit().putStringSet(USAGE_EXCLUDED, s).apply();
         changed(USAGE_EXCLUDED);
+    }
+
+    // ---------------------------------------------------------------- remote buttons
+
+    /** The remote buttons added in Settings → Button Mapper, in the order they were added. */
+    static java.util.List<Integer> buttons(Context ctx) {
+        java.util.List<Integer> out = new java.util.ArrayList<>();
+        for (String s : prefs(ctx).getString(BUTTONS, "").split(",")) {
+            try {
+                if (!s.isEmpty()) out.add(Integer.parseInt(s));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return out;
+    }
+
+    static void addButton(Context ctx, int code) {
+        java.util.List<Integer> all = buttons(ctx);
+        if (all.contains(code)) return;
+        all.add(code);
+        saveButtons(ctx, all);
+    }
+
+    /** Removes the button and its actions. */
+    static void removeButton(Context ctx, int code) {
+        java.util.List<Integer> all = buttons(ctx);
+        all.remove(Integer.valueOf(code));
+        SharedPreferences.Editor e = prefs(ctx).edit();
+        for (int p = 0; p < ButtonMap.PRESS.length; p++) e.remove(ButtonMap.key(code, p));
+        e.apply();
+        saveButtons(ctx, all);
+    }
+
+    /** Every button back to normal (the phone remote's reset, an escape hatch). */
+    static void resetButtons(Context ctx) {
+        for (int code : buttons(ctx)) removeButton(ctx, code);
+    }
+
+    private static void saveButtons(Context ctx, java.util.List<Integer> all) {
+        StringBuilder sb = new StringBuilder();
+        for (int c : all) sb.append(sb.length() > 0 ? "," : "").append(c);
+        prefs(ctx).edit().putString(BUTTONS, sb.toString()).apply();
+        changed(BUTTONS);
+    }
+
+    /** A button's action for a press (ButtonMap): DEFAULT when it has none. */
+    static String buttonAction(Context ctx, int code, int press) {
+        return prefs(ctx).getString(ButtonMap.key(code, press), ButtonMap.DEFAULT);
+    }
+
+    static void setButtonAction(Context ctx, int code, int press, String action) {
+        String k = ButtonMap.key(code, press);
+        if (ButtonMap.DEFAULT.equals(action)) prefs(ctx).edit().remove(k).apply();
+        else prefs(ctx).edit().putString(k, action).apply();
+        changed(k);
     }
 }

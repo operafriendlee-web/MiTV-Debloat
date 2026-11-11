@@ -292,14 +292,18 @@ final class WeatherPanel {
 
     /**
      * The names a MET warning would use for the place: its own, and for Auto the prayer zone's
-     * areas too (the warnings list districts: "Klang", "Kuala Langat").
+     * state and areas too. MET usually lists districts ("Selangor (Klang, Kuala Langat …)"), but
+     * sometimes names a state on its own ("… • Selangor • …"), so the state is matched as well.
      */
     private List<String> warningPlaces(Weather.Place place) {
         List<String> out = new java.util.ArrayList<>();
         out.add(place.name);
         if (LauncherSettings.weatherPlace(ctx).isEmpty()) {
             String[] z = RemoteSettings.zoneEntry(ctx, LauncherSettings.zone(ctx)); // state, code, areas
-            if (z != null) for (String a : z[2].split(",")) out.add(a.trim());
+            if (z != null) {
+                out.add(z[0]); // the state, for a warning that names it without districts
+                for (String a : z[2].split(",")) out.add(a.trim());
+            }
         }
         return out;
     }
@@ -360,14 +364,20 @@ final class WeatherPanel {
         return autoPlace(ctx, places);
     }
 
-    /** Auto: the MET place matching the prayer zone's town (else its state). */
+    /**
+     * Auto: the MET town nearest the TV (where the prayer zone's Auto found it), else the place
+     * matching the prayer zone's town (else its state).
+     */
     static Weather.Place autoPlace(Context ctx, List<Weather.Place> places) {
+        double[] here = LauncherSettings.where(ctx);
+        Weather.Place town = here == null ? null : Weather.nearestTown(places, here[0], here[1]);
+        if (town != null) return town;
         String[] z = RemoteSettings.zoneEntry(ctx, LauncherSettings.zone(ctx)); // state, code, areas
         Weather.Station near = nearestStation(ctx, stations(ctx)); // its town first: forecast and air for one place
         return z == null ? null : Weather.autoPlace(z[0], z[2], places, near == null ? null : near.place);
     }
 
-    /** The station set in Settings, or for Nearest the one closest to the prayer zone's town. */
+    /** The station set in Settings, or for Nearest the one closest to the TV (or the prayer zone's town). */
     static Weather.Station station(Context ctx, List<Weather.Station> stations) {
         String id = LauncherSettings.weatherStation(ctx);
         if (!id.isEmpty()) {
@@ -377,9 +387,10 @@ final class WeatherPanel {
         return nearestStation(ctx, stations);
     }
 
-    /** Nearest: the APIMS station closest to the prayer zone's main town. */
+    /** Nearest: the APIMS station closest to the TV (else to the prayer zone's main town). */
     static Weather.Station nearestStation(Context ctx, List<Weather.Station> stations) {
-        double[] home = Globe.zonePlace(LauncherSettings.zone(ctx));
+        double[] home = LauncherSettings.where(ctx);
+        if (home == null) home = Globe.zonePlace(LauncherSettings.zone(ctx));
         return Weather.nearest(stations, home[0], home[1]);
     }
 

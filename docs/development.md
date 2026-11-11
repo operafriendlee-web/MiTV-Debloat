@@ -49,7 +49,7 @@ The scripts need ADB debugging switched on; the [install guides](../README.md#in
 
 ```bash
 scripts/build-and-install.sh                 # build, install, set as home
-scripts/build-and-install.sh --disable-stock # same, and disable the TV's own launcher (needed on Google TV)
+scripts/build-and-install.sh --disable-stock # same, and disable the TV's own launcher (needed on Google TV, and wherever the TV's own launcher outranks TV Home for Home)
 ```
 Notes on the install:
 - It uses `pm install` over the shell, not `adb install`.
@@ -102,7 +102,7 @@ Check it worked: the next CI run's *Release signing key* step runs instead of be
    ```
 3. CI builds and tests it, then creates the release **TV Home 1.9** with `tvhome-1.9.apk` and notes generated from the commits.
 
-TVs running TV Home 1.10.2 or newer see the release in the bell within 6 hours and can update from there; the setup app shows its own newer version in its header.
+TVs running TV Home 1.10.2 or newer see the release in the bell within a day and can update from there; the setup app shows its own newer version in its header.
 
 The release job refuses to publish if the tag doesn't match `versionName`, or if the signing secrets are missing (a debug-signed release couldn't be updated later without losing settings).
 
@@ -157,7 +157,7 @@ cd launcher
 ./gradlew assembleRelease       # the APK scripts/build-and-install.sh installs
 ```
 
-Gradle needs Java 17+: `export JAVA_HOME="$(/usr/libexec/java_home -v 17+)"` on macOS, or `JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64` on Linux. The tests read a stubbed `android.jar`, so they can't touch the TV's APIs — that's why the logic they cover is kept free of `Context`:
+Gradle needs Java 17-21: `export JAVA_HOME="$(/usr/libexec/java_home -v 21)"` on macOS, or `JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64` on Linux. The build script also picks a suitable JDK itself when `JAVA_HOME` is missing or too new. The tests read a stubbed `android.jar`, so they can't touch the TV's APIs — that's why the logic they cover is kept free of `Context`:
 
 | Test | Covers |
 |---|---|
@@ -171,6 +171,7 @@ Gradle needs Java 17+: `export JAVA_HOME="$(/usr/libexec/java_home -v 17+)"` on 
 | `UpdateCheckTest` | TV Home's own updates: versions compared number by number |
 | `StatusOverlayTest` | Info overlay: speed in decimal bits a second, uptime and elapsed time, the clock |
 | `DreamViewTest` | Screen savers: splitting `logcat` lines (Live log), the Hijri date as on the home screen |
+| `ZoneDetectTest` | Auto prayer zone: towns land in their zone, mountain-top zones are never picked, no guess outside Malaysia |
 | `GlobeTest` | Globe: where the sun is overhead, the prayer lines against JAKIM's times for Kuala Lumpur, the Earth's tilt and the sun in the ecliptic frame, great circles (qibla), every JAKIM zone has a place, reading OpenStreetMap, USGS and aurora feeds, snow and ice map colours, picking the GFS run |
 | `OrbitTest` | Globe satellites: SGP4 against the reference implementation (ISS and Tiangong within 10 m; GPS within 25 km without the Moon and Sun), reading CelesTrak's files |
 | `GribTest` | Globe wind: reading NOAA's GRIB2 (complex packing with spatial differencing, against a real global field; simple packing) |
@@ -179,23 +180,25 @@ Gradle needs Java 17+: `export JAVA_HOME="$(/usr/libexec/java_home -v 17+)"` on 
 
 ## Benchmark
 
-Measured on 2026-10-25 with `scripts/benchmark.sh <home component> <label>`, using the optimised R8 release build of launcher 1.8. Conditions:
+Measured on 2026-11-04 with `scripts/benchmark.sh <home component> <label>`, using the optimised R8 release build of TV Home 1.16.0. Conditions:
 - Nothing was playing, and USB debugging was on.
 - The stock launcher ran without its recommendation services, which this setup disables. It was enabled only for its own run (with it enabled, Home keeps going to it), then disabled again before this launcher's run.
 
-| | This launcher (1.8) | Stock Android TV launcher |
+| | TV Home 1.16.0 | Stock Android TV launcher |
 |---|---|---|
-| Memory, idle / after navigating (PSS) | 88 / **83 MB** | 87 / 122 MB |
-| CPU, idle, 60 s | 0.15 s | 0.11 s |
-| Cold start (process killed → first frame) | **0.51–0.57 s** | 1.49–1.59 s |
-| Back to home from an app (wait time) | 22–24 ms | 17–20 ms |
-| Janky frames while navigating | **5.8 % (33/567)** | 22.4 % (74/331) |
-| Frame time p50 / p90 / p99 | 7 / **8** / 61 ms | 5 / 22 / 40 ms |
-| APK size (TV Home 1.11.0) | **0.51 MB** | 12.7 MB |
+| Memory, idle / after navigating (PSS) | 87 / **115 MB** | 90 / 178 MB |
+| CPU, idle, 60 s | 0.18–0.27 s settled (0.71 s while the weather effects play) | 0.08 s |
+| Cold start (process killed → first frame) | **0.76–0.81 s** | 1.47–2.34 s |
+| Back to home from an app (wait time) | 18–20 ms | 15–17 ms |
+| Janky frames while navigating | **4.8 % (59/1240)** | 29.4 % (109/371) |
+| Frame time p50 / p90 / p99 | 9 / **12** / **38** ms | 7 / 28 / 150 ms |
+| APK size | **0.53 MB** | 12.7 MB |
 
 **Notes:**
 - **Idle memory depends on the graphics buffers.** About 45 MB of this launcher's PSS is GPU memory (`GL mtrack`: the window's buffers, the wallpaper and the tile textures). Whether they're all allocated when the idle sample is taken changes the idle figure a lot: earlier runs measured 44–51 MB idle, this one 88 MB, settling at 82 MB a few minutes later. The after-navigating figure, when everything is drawn, is steady across runs (75–83 MB) and is the fairer comparison.
 - **Extra processes only while used:** the launcher is a single process at idle. The Now Playing helper (~23 MB) runs only while something plays, and the virtual keypad (~21 MB) only for 5 minutes after a phone-remote key press inside an app.
 - **Screensaver:** under the screensaver the launcher uses no CPU (0 ticks in 60 s). The System card refreshes every 5 s, and only while home is on screen and in focus.
 - **Other apps in front:** after 30 s with another full-screen app in front, the app-list tile images are freed and redrawn on return. Hardware bitmaps live in graphics memory, so this saving doesn't show up in PSS.
+- **Idle CPU and the weather effects:** the script measures idle 25 s after its last cold start, while the weather effects (45 s after the home screen starts, when it's raining or stormy; it was) are still playing: 0.71 s. Measured again once they had settled: 0.18–0.27 s per 60 s, with the System card's 5-second refresh the only regular work.
+- **Since 1.8** (2026-10-25: 88 / 83 MB, 0.15 s idle CPU, 0.51–0.57 s cold start, 5.8 % janky frames, against the stock launcher's 87 / 122 MB, 1.49–1.59 s and 22.4 %), the weather card and effects, the Globe, Net traffic, quick actions and Button Mapper came in: cold start is about 0.25 s slower and memory after navigating about 30 MB higher. The stock launcher measured higher too this time (178 MB after navigating, 29.4 % janky), so part of the difference is the TV's state on the day.
 - **Before these optimisations** the same benchmark measured 104 / 133 MB, 0.54 s idle CPU, 2.0–2.1 s cold start and 11.4 % janky frames.
