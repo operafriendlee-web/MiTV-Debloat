@@ -21,8 +21,8 @@ android {
         applicationId 'my.rafhan.app.tvhome'
         minSdk 26          // Android 8.0: the overlays, fonts and java.time need it; the Mi TV runs 10, the Mi Box 9
         targetSdk 36       // some Google TV 14 sets refuse old targets at install
-        versionCode 33
-        versionName '1.17.2'
+        versionCode 36
+        versionName '2.0.1'
         ndk { abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64' }
         // TV Home is English-only: leave out the libraries' translations.
         resourceConfigurations += ['en']
@@ -133,6 +133,8 @@ dependencies {
     // plugin 9 (app/lint.xml).
     implementation 'androidx.core:core:1.13.0'
     implementation 'androidx.annotation:annotation:1.11.0'
+    // Live TV: setting the WebView's Client Hints (Tonton's site turns away Android browsers by them).
+    implementation 'androidx.webkit:webkit:1.15.0'
     // Loopback ADB client for the phone remote (D-pad and typing in any app while USB debugging is on).
     implementation 'dev.mobile:dadb:1.2.10'
 
