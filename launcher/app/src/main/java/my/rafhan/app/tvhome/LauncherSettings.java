@@ -59,6 +59,7 @@ final class LauncherSettings {
     static final String BUTTONS = "btn_keys", BUTTON_LONG_MS = "btn_long_ms", BUTTON_DOUBLE_MS = "btn_double_ms";
     /** How the Globe turns on its own (a choice): SPIN_TWO_MINUTES or SPIN_REAL_TIME. */
     static final String GLOBE_SPIN = "globe_spin";
+    static final String AUTO_CACHE = "auto_cache_hours";
     static final int SPIN_TWO_MINUTES = 0, SPIN_REAL_TIME = 1;
 
     /** What a status-bar slot shows. */

@@ -901,6 +901,8 @@ final class SettingsScreen {
                 new int[] {5, 6, 7}, new String[] {"5", "6", "7"}));
         out.add(toggle(LauncherSettings.SHOW_SYSTEM, "System card", "CPU, RAM, storage, network and USB debugging"));
         out.add(toggle(LauncherSettings.SHOW_NOW, "Now Playing card", "Cover, title and controls while something plays"));
+        out.add(choice(LauncherSettings.AUTO_CACHE, "Auto clear cache", "Frees every app's cache on a timer. Needs USB debugging. Logins and data are kept",
+                new int[] {0, 1, 3, 6, 12}, new String[] {"Off", "1 hour", "3 hours", "6 hours", "12 hours"}));
         out.add(choice(LauncherSettings.WALL_DIM, "Wallpaper dim", "How dark the wallpaper is behind the cards",
                 new int[] {0, 1, 2, 3}, new String[] {"Off", "Low", "Medium", "High"}));
         Row w = new Row(PICKER, "Wallpaper");

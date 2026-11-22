@@ -42,6 +42,39 @@ public class RemoteService extends Service implements LauncherSettings.Listener 
         }
     };
 
+    // Auto clear cache (Settings, Home): every 10 minutes, if the chosen hours have passed since
+    // the last run, trim every app's cache through the loopback ADB shell (needs USB debugging).
+    private static final long AUTO_CACHE_CHECK_MS = 10 * 60_000L;
+    private final Runnable autoCache = new Runnable() {
+        @Override
+        public void run() {
+            Context ctx = RemoteService.this;
+            int hours = LauncherSettings.choice(ctx, LauncherSettings.AUTO_CACHE);
+            if (hours > 0) {
+                android.content.SharedPreferences sp = ctx.getSharedPreferences("auto_cache", Context.MODE_PRIVATE);
+                long last = sp.getLong("last", 0);
+                if (System.currentTimeMillis() - last >= hours * 3_600_000L) {
+                    Thread t = new Thread(() -> {
+                        AdbKeys adb = AdbKeys.get(ctx);
+                        if (adb.state() != AdbKeys.State.READY) return;
+                        AdbKeys.Hid h = adb.shell("pm trim-caches 999G");
+                        if (h == null) return;
+                        try {
+                            while (h.stream.getSource().readUtf8Line() != null) { /* until it exits */ }
+                        } catch (Exception ignored) {
+                        } finally {
+                            adb.stop(h);
+                        }
+                        sp.edit().putLong("last", System.currentTimeMillis()).apply();
+                    }, "auto-cache");
+                    t.setDaemon(true);
+                    t.start();
+                }
+            }
+            main.postDelayed(this, AUTO_CACHE_CHECK_MS);
+        }
+    };
+
     /** Banners and the PIN card over other apps keep the launcher's proportions (UiScale). */
     @Override
     protected void attachBaseContext(Context base) {
@@ -56,6 +89,7 @@ public class RemoteService extends Service implements LauncherSettings.Listener 
         startForeground(1, notification());
         accessibilityKeeper = new AccessibilityKeeper(this);
         accessibilityKeeper.start();
+        main.postDelayed(autoCache, 60_000L);
         RemoteAccessibilityService.checkSoon(this); // after an update it may not be reconnected
         netBanner = new NetBanner(this);
         netBanner.start();
@@ -124,6 +158,7 @@ public class RemoteService extends Service implements LauncherSettings.Listener 
     @Override
     public void onDestroy() {
         main.removeCallbacks(sharedCopies);
+        main.removeCallbacks(autoCache);
         LauncherSettings.removeListener(this);
         if (accessibilityKeeper != null) accessibilityKeeper.stop();
         if (server != null) server.stop();
